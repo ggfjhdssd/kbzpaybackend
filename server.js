@@ -36,21 +36,65 @@ cloudinary.config({
 
 const storage = new CloudinaryStorage({
   cloudinary,
-  params: {
+  params: async (_req, file) => ({
     folder:          'kbzpay_withdrawals',
     allowed_formats: ['jpg','jpeg','png','webp'],
     transformation:  [{ width: 1400, crop: 'limit', quality: 'auto:good' }],
-  },
+    public_id:       `wd_${Date.now()}_${Math.random().toString(36).slice(2,8)}`,
+    resource_type:   'image',
+  }),
 });
 
 const upload = multer({
   storage,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: {
+    fileSize: 10 * 1024 * 1024,  // 10 MB max
+    files: 1,
+  },
   fileFilter: (_req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) cb(null, true);
-    else cb(new Error('Only image files allowed'), false);
+    const ALLOWED_MIME = ['image/jpeg','image/jpg','image/png','image/webp','image/gif'];
+    if (ALLOWED_MIME.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`ပုံဖိုင်သာ တင်ခွင့်ရှိသည် (JPG, PNG, WEBP)။ တင်ထားသောဖိုင်: ${file.mimetype}`), false);
+    }
   },
 });
+
+// Multer error handler middleware — call this after upload middleware
+const handleMulterError = (err, req, res, next) => {
+  if (!err) return next();
+  // Multer-specific errors
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({
+      success: false,
+      message: 'ပုံဖိုင်သည် 10MB ထက်ကြီးနေသည်။ သေးငယ်သောပုံတင်ပါ။',
+    });
+  }
+  if (err.code === 'LIMIT_FILE_COUNT') {
+    return res.status(400).json({ success: false, message: 'ပုံတစ်ပုံသာ တင်ခွင့်ရှိသည်' });
+  }
+  if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+    return res.status(400).json({
+      success: false,
+      message: `Field name မှားနေသည်။ "screenshot" ဟု သုံးပါ (received: ${err.field})`,
+    });
+  }
+  // Custom fileFilter error
+  if (err.message && err.message.includes('ပုံဖိုင်သာ')) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+  // Cloudinary or other upload errors
+  if (err.http_code || err.name === 'Error') {
+    console.error('Upload/Cloudinary error:', err);
+    return res.status(502).json({
+      success: false,
+      message: 'ပုံတင်ရာတွင် error ဖြစ်သည်။ နောက်မှ ထပ်ကြိုးစားပါ။',
+    });
+  }
+  // Pass to global error handler
+  next(err);
+};
 
 // ═══════════════════════════════════════════
 //  MONGOOSE MODELS
@@ -114,11 +158,38 @@ const SupportMsg = mongoose.model('SupportMessage', supportSchema);
 const app = express();
 
 app.use(helmet({ crossOriginResourcePolicy: false }));
+
+// ── CORS — Fix for FormData/file upload from Vercel frontend ─────────────────
+const ALLOWED_ORIGINS = [
+  FRONTEND_URL,
+  'https://kbzpayfrontend.vercel.app',
+  'https://kbzpaybackend.onrender.com',
+  'http://localhost:3000',
+  'http://localhost:5000',
+];
+
 app.use(cors({
-  origin: [FRONTEND_URL, 'https://kbzpaybackend.onrender.com'],
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, Telegram WebApp)
+    if (!origin) return callback(null, true);
+    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    // Allow any vercel.app preview URLs
+    if (origin.endsWith('.vercel.app')) return callback(null, true);
+    return callback(new Error(`CORS blocked: ${origin}`));
+  },
   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','x-telegram-id','x-admin-secret'],
+  allowedHeaders: [
+    'Content-Type',
+    'x-telegram-id',
+    'x-admin-secret',
+    'Authorization',
+  ],
+  credentials: true,
+  optionsSuccessStatus: 200, // Some browsers (IE11) choke on 204
 }));
+
+// Handle preflight OPTIONS for all routes (important for FormData uploads)
+app.options('*', cors());
 app.use(rateLimit({
   windowMs: 60 * 1000, max: 90,
   standardHeaders: true, legacyHeaders: false,
@@ -262,85 +333,155 @@ app.get('/api/users/leaderboard', async (_req, res) => {
 });
 
 // ── Withdrawal: submit ────────────────────────────────────────────────────────
-app.post('/api/withdrawals', requireUser, upload.single('screenshot'), async (req, res) => {
-  try {
-    const user   = req.user;
-    const amount = parseInt(req.body.amount);
-
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: 'Screenshot လိုအပ်သည်' });
-    }
-    if (isNaN(amount) || amount < MIN_WITHDRAW) {
-      return res.status(400).json({ success: false, message: `အနည်းဆုံး ${MIN_WITHDRAW.toLocaleString()} MMK ထုတ်ယူရမည်` });
-    }
-    if (user.balance < amount + SERVICE_FEE) {
-      return res.status(400).json({ success: false, message: `လက်ကျန်ငွေ မလုံလောက်ပါ (ငွေ + ဝန်ဆောင်ခ ${SERVICE_FEE.toLocaleString()} Ks)` });
-    }
-
-    const hasPending = await Withdrawal.findOne({ telegramId: user.telegramId, status: 'pending' });
-    if (hasPending) {
-      return res.status(409).json({ success: false, message: 'ကြိုတင်တင်ထားသော ငွေထုတ်မှု ရှိနေပါသည်' });
-    }
-
-    // Deduct balance
-    const newBalance = user.balance - (amount + SERVICE_FEE);
-    await User.findByIdAndUpdate(user._id, { $inc: { balance: -(amount + SERVICE_FEE) } });
-
-    // Create withdrawal record
-    const wd = await Withdrawal.create({
-      user:               user._id,
-      telegramId:         user.telegramId,
-      amount,
-      fee:                SERVICE_FEE,
-      netAmount:          amount - SERVICE_FEE,
-      screenshotUrl:      req.file.path,
-      screenshotPublicId: req.file.filename,
+app.post('/api/withdrawals',
+  requireUser,
+  // Wrap multer to intercept upload errors before they hit global handler
+  (req, res, next) => {
+    upload.single('screenshot')(req, res, (err) => {
+      if (err) return handleMulterError(err, req, res, next);
+      next();
     });
+  },
+  async (req, res) => {
+    let balanceDeducted = false;
+    let deductAmount    = 0;
 
-    // Notify admin via Telegram bot
-    if (ADMIN_ID) {
-      const adminMsg =
-        `💸 <b>ငွေထုတ်ယူမှု တောင်းဆိုမှု</b>\n\n` +
-        `👤 ${user.displayName} (@${user.username || 'N/A'})\n` +
-        `🆔 <code>${user.telegramId}</code>\n` +
-        `💰 Amount: <b>${amount.toLocaleString()} Ks</b>\n` +
-        `💳 Fee: ${SERVICE_FEE.toLocaleString()} Ks\n` +
-        `✅ Net: <b>${(amount - SERVICE_FEE).toLocaleString()} Ks</b>\n` +
-        `🕐 ${new Date().toLocaleString()}`;
+    try {
+      const user = req.user;
 
-      await sendTg(ADMIN_ID, adminMsg, {
-        reply_markup: {
-          inline_keyboard: [[
-            { text: '✅ Approve', callback_data: `wd_approve_${wd._id}` },
-            { text: '❌ Reject',  callback_data: `wd_reject_${wd._id}`  },
-          ]],
+      // ── FormData: amount comes as string — parseInt safely ───────────────
+      const rawAmount = req.body && req.body.amount;
+      const amount    = parseInt(rawAmount, 10);
+
+      // ── Validate screenshot ──────────────────────────────────────────────
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: 'Screenshot ပုံတင်ရန် လိုအပ်သည်',
+        });
+      }
+
+      // ── Validate Cloudinary returned a URL ──────────────────────────────
+      if (!req.file.path) {
+        return res.status(502).json({
+          success: false,
+          message: 'Cloudinary သို့ ပုံ မတင်နိုင်ပါ။ နောက်မှ ထပ်ကြိုးစားပါ။',
+        });
+      }
+
+      // ── Validate amount ──────────────────────────────────────────────────
+      if (!rawAmount || isNaN(amount) || amount < MIN_WITHDRAW) {
+        return res.status(400).json({
+          success: false,
+          message: `ထုတ်ယူမည့်ပမာဏ မမှန်ကန်ပါ။ အနည်းဆုံး ${MIN_WITHDRAW.toLocaleString()} MMK ဖြစ်ရမည်`,
+        });
+      }
+
+      // ── Validate balance ─────────────────────────────────────────────────
+      const totalDeduct = amount + SERVICE_FEE;
+      if (user.balance < totalDeduct) {
+        return res.status(400).json({
+          success: false,
+          message: `လက်ကျန်ငွေ မလုံလောက်ပါ (ထုတ်မည့်ငွေ ${amount.toLocaleString()} + ဝန်ဆောင်ခ ${SERVICE_FEE.toLocaleString()} = ${totalDeduct.toLocaleString()} Ks လိုသည်)`,
+        });
+      }
+
+      // ── No duplicate pending withdrawal ──────────────────────────────────
+      const hasPending = await Withdrawal.findOne({
+        telegramId: user.telegramId,
+        status: 'pending',
+      });
+      if (hasPending) {
+        return res.status(409).json({
+          success: false,
+          message: 'ကြိုတင်တင်ထားသော ငွေထုတ်မှု ရှိနေသေးပါသည်',
+        });
+      }
+
+      // ── Deduct balance ───────────────────────────────────────────────────
+      deductAmount      = totalDeduct;
+      const newBalance  = user.balance - totalDeduct;
+      await User.findByIdAndUpdate(user._id, { $inc: { balance: -totalDeduct } });
+      balanceDeducted   = true;
+
+      // ── Create withdrawal DB record ──────────────────────────────────────
+      let wd;
+      try {
+        wd = await Withdrawal.create({
+          user:               user._id,
+          telegramId:         user.telegramId,
+          amount,
+          fee:                SERVICE_FEE,
+          netAmount:          amount - SERVICE_FEE,
+          screenshotUrl:      req.file.path,
+          screenshotPublicId: req.file.filename || req.file.public_id || '',
+        });
+      } catch (dbErr) {
+        // DB failed — roll back balance immediately
+        await User.findByIdAndUpdate(user._id, { $inc: { balance: deductAmount } }).catch(() => {});
+        console.error('DB create withdrawal failed:', dbErr.message);
+        return res.status(500).json({
+          success: false,
+          message: 'မှတ်တမ်းသိမ်းရာတွင် error ဖြစ်သည်။ Balance ပြန်ထည့်ပေးပြီးပါပြီ။',
+        });
+      }
+
+      // ── Notify admin via Telegram (non-fatal) ────────────────────────────
+      if (ADMIN_ID && bot) {
+        const adminMsg =
+          `💸 <b>ငွေထုတ်ယူမှု တောင်းဆိုမှု</b>\n\n` +
+          `👤 ${user.displayName} (@${user.username || 'N/A'})\n` +
+          `🆔 <code>${user.telegramId}</code>\n` +
+          `💰 Amount: <b>${amount.toLocaleString()} Ks</b>\n` +
+          `💳 Fee: ${SERVICE_FEE.toLocaleString()} Ks\n` +
+          `✅ Net: <b>${(amount - SERVICE_FEE).toLocaleString()} Ks</b>\n` +
+          `🕐 ${new Date().toLocaleString()}`;
+
+        await sendTg(ADMIN_ID, adminMsg, {
+          reply_markup: {
+            inline_keyboard: [[
+              { text: '✅ Approve', callback_data: `wd_approve_${wd._id}` },
+              { text: '❌ Reject',  callback_data: `wd_reject_${wd._id}`  },
+            ]],
+          },
+        }).catch((e) => console.warn('Admin TG notify failed:', e.message));
+
+        await bot.telegram.sendPhoto(
+          ADMIN_ID,
+          { url: wd.screenshotUrl },
+          { caption: `📸 ${user.displayName} — ${amount.toLocaleString()} Ks` }
+        ).catch((e) => console.warn('Admin photo send failed:', e.message));
+      }
+
+      return res.status(201).json({
+        success: true,
+        message: 'ငွေထုတ်ယူမှု တင်ပြီးပါပြီ။ Admin မှ စစ်ဆေးပြီးနောက် Telegram မှ အကြောင်းကြားပါမည်။',
+        data: {
+          id:        wd._id,
+          amount:    wd.amount,
+          fee:       wd.fee,
+          netAmount: wd.netAmount,
+          status:    wd.status,
+          newBalance,
         },
       });
 
-      // Send screenshot
-      await bot.telegram.sendPhoto(ADMIN_ID,
-        { url: wd.screenshotUrl },
-        { caption: `📸 ${user.displayName} — ${amount.toLocaleString()} Ks` }
-      ).catch(() => {});
+    } catch (err) {
+      console.error('Withdrawal unexpected error:', err.message);
+      // Safety rollback if balance was deducted but something failed after
+      if (balanceDeducted && req.user) {
+        await User.findByIdAndUpdate(req.user._id, {
+          $inc: { balance: deductAmount },
+        }).catch((e) => console.error('CRITICAL — balance rollback failed:', e.message));
+        console.warn(`Balance rollback: +${deductAmount} for ${req.user.telegramId}`);
+      }
+      return res.status(500).json({
+        success: false,
+        message: err.message || 'Server error ဖြစ်သည်',
+      });
     }
-
-    res.status(201).json({
-      success: true,
-      message: 'ငွေထုတ်ယူမှု တင်ပြီးပါပြီ။ Admin မှ စစ်ဆေးပြီးနောက် Telegram မှ အကြောင်းကြားပါမည်။',
-      data: {
-        id:         wd._id,
-        amount:     wd.amount,
-        fee:        wd.fee,
-        netAmount:  wd.netAmount,
-        status:     wd.status,
-        newBalance,
-      },
-    });
-  } catch (err) {
-    console.error('Withdrawal error:', err);
-    res.status(500).json({ success: false, message: err.message || 'Server error' });
   }
-});
+);
 
 // ── Withdrawal: user's own history ────────────────────────────────────────────
 app.get('/api/withdrawals/mine', requireUser, async (req, res) => {
@@ -543,9 +684,35 @@ app.use('/api/admin', adminRouter);
 
 // 404
 app.use((_req, res) => res.status(404).json({ success: false, message: 'Route not found' }));
-// Global error
+
+// ── Global error handler (catches anything not handled above) ─────────────────
 app.use((err, _req, res, _next) => {
-  console.error('Error:', err.message);
+  console.error('Global error:', err.code || '', err.message);
+
+  // Multer errors
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({ success: false, message: 'ပုံဖိုင် 10MB ထက်ကြီးနေသည်' });
+  }
+  if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+    return res.status(400).json({ success: false, message: `FormData field name မှားနေသည် — "screenshot" သုံးပါ (received: ${err.field})` });
+  }
+
+  // CORS error
+  if (err.message && err.message.startsWith('CORS blocked')) {
+    return res.status(403).json({ success: false, message: err.message });
+  }
+
+  // Cloudinary errors (http_code present)
+  if (err.http_code) {
+    return res.status(502).json({ success: false, message: `Cloudinary error ${err.http_code}: ${err.message}` });
+  }
+
+  // Mongoose validation
+  if (err.name === 'ValidationError') {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+
+  // Default
   res.status(500).json({ success: false, message: err.message || 'Internal server error' });
 });
 
