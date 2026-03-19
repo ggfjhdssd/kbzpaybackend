@@ -97,6 +97,14 @@ const supportSchema = new mongoose.Schema({
 }, { timestamps: true });
 const SupportMsg = mongoose.model('SupportMessage', supportSchema);
 
+// PaymentConfig — admin can change KPay number/name from admin panel
+const paymentConfigSchema = new mongoose.Schema({
+  key:   { type: String, required: true, unique: true },  // e.g. 'payment'
+  phone: { type: String, default: '09792310926' },
+  name:  { type: String, default: 'Mi Thaung' },
+}, { timestamps: true });
+const PaymentConfig = mongoose.model('PaymentConfig', paymentConfigSchema);
+
 // ═══════════════════════════════════════════════════
 //  EXPRESS
 // ═══════════════════════════════════════════════════
@@ -163,10 +171,21 @@ const sendTgPhoto = (chatId, buffer, filename, caption, extra = {}) => {
 // ═══════════════════════════════════════════════════
 app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'KBZPay Backend', time: new Date().toISOString() }));
 
-app.get('/api/config', (_req, res) => res.json({
-  success: true,
-  data: { paymentPhone: PAYMENT_PHONE, paymentName: PAYMENT_NAME, minWithdraw: MIN_WITHDRAW, serviceFee: SERVICE_FEE, referralBonus: REFERRAL_BONUS },
-}));
+app.get('/api/config', async (_req, res) => {
+  try {
+    const cfg = await PaymentConfig.findOne({ key: 'payment' }).catch(() => null);
+    res.json({
+      success: true,
+      data: {
+        paymentPhone:  cfg ? cfg.phone : PAYMENT_PHONE,
+        paymentName:   cfg ? cfg.name  : PAYMENT_NAME,
+        minWithdraw:   MIN_WITHDRAW,
+        serviceFee:    SERVICE_FEE,
+        referralBonus: REFERRAL_BONUS,
+      },
+    });
+  } catch { res.json({ success: true, data: { paymentPhone: PAYMENT_PHONE, paymentName: PAYMENT_NAME, minWithdraw: MIN_WITHDRAW, serviceFee: SERVICE_FEE, referralBonus: REFERRAL_BONUS } }); }
+});
 
 app.post('/api/users/me', async (req, res) => {
   try {
@@ -426,6 +445,27 @@ adminRouter.post('/broadcast', async (req, res) => {
     let sent=0, failed=0;
     for (const u of users) { const ok = await sendTg(u.telegramId, `📢 <b>ကြေညာချက်</b>\n\n${msg}`); ok ? sent++ : failed++; await new Promise(r=>setTimeout(r,60)); }
     res.json({ success: true, data: { sent, failed, total: users.length } });
+  } catch { res.status(500).json({ success: false, message: 'Server error' }); }
+});
+
+// ── Admin: get/set payment KPay number ───────────────────────────────────────
+adminRouter.get('/payment-config', async (_req, res) => {
+  try {
+    const cfg = await PaymentConfig.findOne({ key: 'payment' });
+    res.json({ success: true, data: cfg || { phone: PAYMENT_PHONE, name: PAYMENT_NAME } });
+  } catch { res.status(500).json({ success: false, message: 'Server error' }); }
+});
+
+adminRouter.post('/payment-config', async (req, res) => {
+  try {
+    const { phone, name } = req.body;
+    if (!phone || !name) return res.status(400).json({ success: false, message: 'phone and name required' });
+    const cfg = await PaymentConfig.findOneAndUpdate(
+      { key: 'payment' },
+      { phone: phone.trim(), name: name.trim() },
+      { upsert: true, new: true }
+    );
+    res.json({ success: true, data: cfg, message: 'Payment config updated' });
   } catch { res.status(500).json({ success: false, message: 'Server error' }); }
 });
 
