@@ -10,8 +10,18 @@ services:
       - key: NODE_ENV
         value: production
       - key: PORT
-        value: 10000
-      # ── Fill these in Render dashboard ──
+        value: "10000"
+      - key: MIN_WITHDRAW
+        value: "100000"
+      - key: SERVICE_FEE
+        value: "5000"
+      - key: REFERRAL_BONUS
+        value: "5000"
+      - key: PAYMENT_PHONE
+        value: "09702310926"
+      - key: PAYMENT_NAME
+        value: "Daw Mi Thaung"
+      # ── Fill these in Render Dashboard → Environment ──
       - key: MONGODB_URI
         sync: false
       - key: BOT_TOKEN
@@ -28,17 +38,3 @@ services:
         sync: false
       - key: CLOUDINARY_API_SECRET
         sync: false
-      - key: FRONTEND_URL
-        sync: false
-      - key: MINI_APP_URL
-        sync: false
-      - key: MIN_WITHDRAW
-        value: "100000"
-      - key: SERVICE_FEE
-        value: "5000"
-      - key: REFERRAL_BONUS
-        value: "5000"
-      - key: PAYMENT_PHONE
-        value: "09702310926"
-      - key: PAYMENT_NAME
-        value: "Daw Mi Thaung"
