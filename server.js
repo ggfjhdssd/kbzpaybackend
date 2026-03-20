@@ -1084,7 +1084,6 @@ function initBot() {
 
     // Admin-only callbacks below
     if (adminId !== ADMIN_ID) return ctx.answerCbQuery('⛔ Unauthorized');
-    const data = ctx.callbackQuery.data;
 
     if (data.startsWith('reply_')) {
       pendingReplies[ADMIN_ID] = data.replace('reply_','');
