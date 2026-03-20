@@ -187,6 +187,25 @@ app.get('/api/config', async (_req, res) => {
   } catch { res.json({ success: true, data: { paymentPhone: PAYMENT_PHONE, paymentName: PAYMENT_NAME, minWithdraw: MIN_WITHDRAW, serviceFee: SERVICE_FEE, referralBonus: REFERRAL_BONUS } }); }
 });
 
+// ── Ad reward: add balance after watching ad ──────────────────────────────────
+app.post('/api/ad-reward', requireUser, async (req, res) => {
+  try {
+    const { amount } = req.body;
+    const reward = parseInt(amount) || 3000;
+    if (reward <= 0 || reward > 10000)
+      return res.status(400).json({ success: false, message: 'Invalid reward amount' });
+    const updated = await User.findByIdAndUpdate(
+      req.user._id,
+      { $inc: { balance: reward, totalEarned: reward } },
+      { new: true }
+    );
+    return res.json({ success: true, data: { newBalance: updated.balance } });
+  } catch (err) {
+    console.error('/api/ad-reward error:', err.message);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 app.post('/api/users/me', async (req, res) => {
   try {
     const { telegramId, firstName, lastName, username, referralCode } = req.body;
