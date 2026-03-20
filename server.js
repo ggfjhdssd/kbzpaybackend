@@ -265,34 +265,57 @@ app.post('/api/ad-reward', requireUser, asyncHandler(async (req, res) => {
   res.json({ success: true, data: { newBalance: updated.balance } });
 }));
 
-// User init/login
+// User init/login — Fixed Referral Logic (ref_ prefix optional, self-referral blocked)
 app.post('/api/users/me', asyncHandler(async (req, res) => {
-  const { telegramId, firstName, lastName, username, referralCode } = req.body;
+  let { telegramId, firstName, lastName, username, referralCode } = req.body;
   if (!telegramId) return res.status(400).json({ success: false, message: 'telegramId required' });
 
   let user = await User.findOne({ telegramId });
+
   if (!user) {
     const myCode = `ref_${telegramId}`;
-    user = await User.create({ telegramId, firstName, lastName, username, referralCode: myCode });
-    if (referralCode && referralCode !== myCode) {
-      const refId = referralCode.replace('ref_', '');
-      const referrer = await User.findOne({ telegramId: refId });
-      if (referrer && !referrer.isBanned) {
-        await User.findByIdAndUpdate(referrer._id, {
-          $inc: { balance: REFERRAL_BONUS, totalEarned: REFERRAL_BONUS, referrals: 1 },
-        });
-        user.referredBy = refId;
-        await user.save();
-        await sendTg(refId, `🎉 <b>မိတ်ဆွေ ဝင်ရောက်ပြီ!</b>\n💰 ${REFERRAL_BONUS.toLocaleString()} Ks ထည့်ပေးပြီးပါပြီ`);
+
+    // Create user first
+    user = new User({ telegramId, firstName, lastName, username, referralCode: myCode });
+
+    // Process referral if provided
+    if (referralCode) {
+      // Handle both "ref_12345" and "12345" formats
+      const cleanRefId = referralCode.replace('ref_', '');
+
+      // Block self-referral
+      if (cleanRefId !== String(telegramId)) {
+        const referrer = await User.findOne({ telegramId: cleanRefId });
+
+        if (referrer && !referrer.isBanned) {
+          // Credit referrer
+          await User.findByIdAndUpdate(referrer._id, {
+            $inc: { balance: REFERRAL_BONUS, totalEarned: REFERRAL_BONUS, referrals: 1 },
+          });
+
+          // Save who referred this user
+          user.referredBy = cleanRefId;
+
+          // Notify referrer
+          await sendTg(cleanRefId,
+            `🎉 <b>မိတ်ဆွေသစ် တစ်ယောက် ရောက်လာပါပြီ!</b>\n\n` +
+            `လူကြီးမင်း၏ Link မှတစ်ဆင့် ဝင်ရောက်လာသောကြောင့် Referral Bonus ` +
+            `<b>${REFERRAL_BONUS.toLocaleString()} Ks</b> ထည့်ပေးပြီးပါပြီ။`
+          );
+        }
       }
     }
+
+    await user.save();
+
   } else {
+    // Update existing user
     await User.findByIdAndUpdate(user._id, {
       firstName: firstName || user.firstName,
       lastName:  lastName  || user.lastName,
       username:  username  || user.username,
       lastSeen:  new Date(),
-      isBlocked: false, // re-activated if they're using the app
+      isBlocked: false,
     });
     user = await User.findById(user._id);
   }
@@ -698,15 +721,24 @@ function initBot() {
           lastName: tgUser.last_name||'', username: tgUser.username||'',
           referralCode: myCode,
         });
-        if (startParam.startsWith('ref_') && startParam !== myCode) {
-          const refId = startParam.replace('ref_','');
-          const referrer = await User.findOne({ telegramId: refId });
-          if (referrer && !referrer.isBanned) {
-            await User.findByIdAndUpdate(referrer._id, {
-              $inc: { balance: REFERRAL_BONUS, totalEarned: REFERRAL_BONUS, referrals: 1 },
-            });
-            user.referredBy = refId; await user.save();
-            await sendTg(refId, `🎉 <b>မိတ်ဆွေ ဝင်ရောက်ပြီ!</b>\n💰 ${REFERRAL_BONUS.toLocaleString()} Ks ထည့်ပေးပြီးပါပြီ`);
+        if (startParam) {
+          // Handle both "ref_12345" and "12345" formats
+          const cleanRefId = startParam.replace('ref_', '');
+
+          // Block self-referral
+          if (cleanRefId !== chatId) {
+            const referrer = await User.findOne({ telegramId: cleanRefId });
+            if (referrer && !referrer.isBanned) {
+              await User.findByIdAndUpdate(referrer._id, {
+                $inc: { balance: REFERRAL_BONUS, totalEarned: REFERRAL_BONUS, referrals: 1 },
+              });
+              user.referredBy = cleanRefId; await user.save();
+              await sendTg(cleanRefId,
+                `🎉 <b>မိတ်ဆွေသစ် တစ်ယောက် ရောက်လာပါပြီ!</b>\n\n` +
+                `လူကြီးမင်း၏ Link မှတစ်ဆင့် ဝင်ရောက်လာသောကြောင့် Referral Bonus ` +
+                `<b>${REFERRAL_BONUS.toLocaleString()} Ks</b> ထည့်ပေးပြီးပါပြီ။`
+              );
+            }
           }
         }
       } else {
