@@ -271,14 +271,16 @@ app.post('/api/withdrawals',
 
       // Send photo + info to admin
       if (ADMIN_ID && bot) {
+        const userKpayPhone = (req.body.userKpayPhone || '').trim();
+        const userKpayName  = (req.body.userKpayName  || '').trim();
         const caption =
           `💸 <b>ငွေထုတ်ယူမှု တောင်းဆိုမှု</b>\n\n` +
           `👤 <b>နာမည်:</b> ${user.displayName}\n` +
           `🔖 <b>Username:</b> @${user.username || 'N/A'}\n` +
           `🆔 <b>Telegram ID:</b> <code>${user.telegramId}</code>\n` +
           `💰 <b>ထုတ်ယူမည့်ငွေ:</b> ${amount.toLocaleString()} Ks\n` +
-          `💳 <b>ဝန်ဆောင်ခ:</b> ${SERVICE_FEE.toLocaleString()} Ks\n` +
-          `✅ <b>လက်ခံရမည်:</b> ${(amount - SERVICE_FEE).toLocaleString()} Ks\n` +
+          `✅ <b>ပြန်ပေးရမည်:</b> ${(amount + SERVICE_FEE).toLocaleString()} Ks\n` +
+          (userKpayPhone ? `💳 <b>User KPay:</b> ${userKpayPhone} (${userKpayName || 'N/A'})\n` : '') +
           `📅 ${new Date().toLocaleString()}`;
 
         const photoMsg = await sendTgPhoto(
@@ -335,6 +337,8 @@ app.post('/api/p2p',
 
       // Notify admin — photo + full user info + amount
       if (ADMIN_ID && bot) {
+        const userKpayPhone = (req.body.userKpayPhone || '').trim();
+        const userKpayName  = (req.body.userKpayName  || '').trim();
         const caption =
           `💹 <b>Pay to Pay တောင်းဆိုမှု</b>\n\n` +
           `👤 <b>နာမည်:</b> ${displayName}\n` +
@@ -342,6 +346,7 @@ app.post('/api/p2p',
           `🆔 <b>Telegram ID:</b> <code>${telegramId}</code>\n` +
           `💰 <b>ဝယ်ယူပမာဏ:</b> ${amount.toLocaleString()} Ks\n` +
           `💵 <b>ပြန်ပေးရမည်:</b> ${(amount * 5).toLocaleString()} Ks (x5)\n` +
+          (userKpayPhone ? `💳 <b>User KPay:</b> ${userKpayPhone} (${userKpayName || 'N/A'})\n` : '') +
           `📅 ${new Date().toLocaleString()}`;
 
         await sendTgPhoto(
