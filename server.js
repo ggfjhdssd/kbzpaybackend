@@ -33,6 +33,9 @@ const PAYMENT_PHONE  = process.env.PAYMENT_PHONE  || '09702310926';
 const PAYMENT_NAME   = process.env.PAYMENT_NAME   || 'Daw Mi Thaung';
 const BOT_USERNAME   = process.env.BOT_USERNAME   || 'YourBotUsername';
 const FRONTEND_URL   = 'https://kbzpayfrontend.vercel.app';
+// Channel that users must join before using the bot
+const CHANNEL_ID     = process.env.CHANNEL_ID    || '@Kbzzpay';   // e.g. @Kbzzpay
+const CHANNEL_LINK   = process.env.CHANNEL_LINK  || 'https://t.me/Kbzzpay';
 
 // ═══════════════════════════════════════════════════════════════
 //  ASYNC HANDLER WRAPPER — try/catch ထပ်ခါတလဲ မရေးရအောင်
@@ -642,10 +645,51 @@ function initBot() {
   const pendingReplies    = {};
   const pendingRejections = {};
 
+  // ── Helper: check if user has joined the channel ─────────────────────────────
+  async function isChannelMember(userId) {
+    try {
+      const member = await bot.telegram.getChatMember(CHANNEL_ID, Number(userId));
+      return ['member','administrator','creator'].includes(member.status);
+    } catch {
+      return false; // If can't check, assume not member
+    }
+  }
+
+  // ── Send channel join prompt ──────────────────────────────────────────────────
+  async function sendJoinPrompt(ctx) {
+    await ctx.reply(
+      `👋 မင်္ဂလာပါ ${ctx.from.first_name}!\n\n` +
+      `⚠️ <b>Bot ကို အသုံးပြုရန် ကျွန်ုပ်တို့၏ Channel ကို အရင် Join ပါ။</b>\n\n` +
+      `📢 Channel Join ပြီးမှ <b>Joined ✅</b> ကိုနှိပ်ပါ။`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '📢 Channel Join မည်', url: CHANNEL_LINK },
+          ],[
+            { text: 'Joined ✅', callback_data: `check_join_${ctx.from.id}` },
+          ]],
+        },
+      }
+    );
+  }
+
   // /start
   bot.start(async ctx => {
-    const tgUser = ctx.from, chatId = String(ctx.chat.id), startParam = ctx.startPayload || '';
+    const tgUser    = ctx.from;
+    const chatId    = String(ctx.chat.id);
+    const startParam = ctx.startPayload || '';
+
     try {
+      // Admin bypasses channel check
+      if (chatId !== ADMIN_ID) {
+        const joined = await isChannelMember(chatId);
+        if (!joined) {
+          return sendJoinPrompt(ctx);
+        }
+      }
+
+      // Channel joined — proceed with registration
       let user = await User.findOne({ telegramId: chatId });
       if (!user) {
         const myCode = `ref_${chatId}`;
@@ -667,8 +711,10 @@ function initBot() {
         }
       } else {
         await User.findByIdAndUpdate(user._id, {
-          firstName: tgUser.first_name||user.firstName, lastName: tgUser.last_name||user.lastName,
-          username: tgUser.username||user.username, lastSeen: new Date(), isBlocked: false,
+          firstName: tgUser.first_name||user.firstName,
+          lastName:  tgUser.last_name ||user.lastName,
+          username:  tgUser.username  ||user.username,
+          lastSeen:  new Date(), isBlocked: false,
         });
       }
 
@@ -985,6 +1031,58 @@ function initBot() {
   // Inline button callbacks
   bot.on('callback_query', async ctx => {
     const adminId = String(ctx.from.id);
+    const data    = ctx.callbackQuery.data;
+
+    // ── Channel join check (any user) ─────────────────────────────────────────
+    if (data.startsWith('check_join_')) {
+      const userId = String(ctx.from.id);
+      const joined = await isChannelMember(userId);
+      if (!joined) {
+        await ctx.answerCbQuery('⚠️ Channel မ Join ရသေးပါ။ Join ပြီးမှ ထပ်နှိပ်ပါ။', { show_alert: true });
+        return;
+      }
+      // Joined — delete the join prompt message
+      await ctx.deleteMessage().catch(() => {});
+      await ctx.answerCbQuery('✅ Channel Join ပြီးပါပြီ!');
+
+      // Register user and show welcome
+      const tgUser = ctx.from, chatId = userId, startParam = '';
+      try {
+        let user = await User.findOne({ telegramId: chatId });
+        if (!user) {
+          const myCode = `ref_${chatId}`;
+          user = await User.create({
+            telegramId: chatId, firstName: tgUser.first_name||'',
+            lastName: tgUser.last_name||'', username: tgUser.username||'',
+            referralCode: myCode,
+          });
+        } else {
+          await User.findByIdAndUpdate(user._id, {
+            firstName: tgUser.first_name||user.firstName, lastName: tgUser.last_name||user.lastName,
+            username: tgUser.username||user.username, lastSeen: new Date(), isBlocked: false,
+          });
+        }
+        if (user.isBanned) {
+          return ctx.reply(`🚫 Account ပိတ်ထားပါသည်\nအကြောင်း: ${user.banReason}`);
+        }
+        await ctx.reply(
+          `👋 မင်္ဂလာပါ ${tgUser.first_name}\n` +
+          `KBZPay Mini App မှ ကြိုဆိုပါသည် 🎉\n\n` +
+          `💰 ယခုပဲ <b>💰 App ဖွင့်မည်</b> ကိုနှိပ်ပြီး ပိုက်ဆံများ စတင်ရှာဖွေလိုက်ပါ။\n\n` +
+          `👥 အထူးအစီအစဉ်အနေဖြင့် မိမိ၏ သူငယ်ချင်းများကို ဖိတ်ခေါ်ပြီး တစ်ယောက်လျှင် ` +
+          `<b>၅,၀၀၀ ကျပ်</b> စီ အခမဲ့ ရယူကာ ပိုက်ဆံများ အမြန်ဆုံး ထုတ်ယူနိုင်ပါပြီ။`,
+          {
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: [[
+              { text: '💰 App ဖွင့်မည်', web_app: { url: FRONTEND_URL } },
+            ]]},
+          }
+        );
+      } catch (e) { console.error('check_join register error:', e.message); }
+      return;
+    }
+
+    // Admin-only callbacks below
     if (adminId !== ADMIN_ID) return ctx.answerCbQuery('⛔ Unauthorized');
     const data = ctx.callbackQuery.data;
 
