@@ -311,6 +311,53 @@ app.post('/api/withdrawals',
   }
 );
 
+
+// ── Pay to Pay: submit (NO balance deduction — external KPay transfer) ──────
+// User transfers from their own KPay externally, uploads screenshot, admin notified
+app.post('/api/p2p',
+  requireUser,
+  (req, res, next) => { upload.single('screenshot')(req, res, err => { if (err) return handleMulterError(err, req, res, next); next(); }); },
+  async (req, res) => {
+    try {
+      const user      = req.user;
+      const rawAmount = req.body?.amount;
+      const amount    = parseInt(rawAmount, 10);
+
+      if (!req.file?.buffer)
+        return res.status(400).json({ success: false, message: 'Screenshot ပုံတင်ရန် လိုအပ်သည်' });
+      if (!rawAmount || isNaN(amount) || amount < 20000)
+        return res.status(400).json({ success: false, message: 'အနည်းဆုံး 20,000 Ks ဖြစ်ရမည်' });
+
+      // Notify admin — photo + full user info + amount
+      if (ADMIN_ID && bot) {
+        const caption =
+          `💹 <b>Pay to Pay တောင်းဆိုမှု</b>\n\n` +
+          `👤 <b>နာမည်:</b> ${user.displayName}\n` +
+          `🔖 <b>Username:</b> @${user.username || 'N/A'}\n` +
+          `🆔 <b>Telegram ID:</b> <code>${user.telegramId}</code>\n` +
+          `💰 <b>ဝယ်ယူပမာဏ:</b> ${amount.toLocaleString()} Ks\n` +
+          `💵 <b>ပြန်ပေးရမည်:</b> ${(amount * 5).toLocaleString()} Ks (x5)\n` +
+          `📅 ${new Date().toLocaleString()}`;
+
+        await sendTgPhoto(
+          ADMIN_ID,
+          req.file.buffer,
+          req.file.originalname || 'p2p_screenshot.jpg',
+          caption
+        );
+      }
+
+      return res.status(201).json({
+        success: true,
+        message: 'တင်ပြီးပါပြီ။ Admin မှ စစ်ဆေးပြီးနောက် Telegram မှ အကြောင်းကြားပါမည်။',
+      });
+    } catch (err) {
+      console.error('/api/p2p error:', err.message);
+      return res.status(500).json({ success: false, message: err.message || 'Server error' });
+    }
+  }
+);
+
 app.get('/api/withdrawals/mine', requireUser, async (req, res) => {
   try {
     const wds = await Withdrawal.find({ telegramId: req.user.telegramId }).sort({ createdAt: -1 }).limit(20);
