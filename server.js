@@ -678,8 +678,12 @@ function initBot() {
     }
   }
 
-  // ── Send channel join prompt ──────────────────────────────────────────────────
-  async function sendJoinPrompt(ctx) {
+  // ── Send channel join prompt (referral code ပါ encode လုပ်ထားသည်) ─────────────
+  async function sendJoinPrompt(ctx, refCode = '') {
+    // callback_data: "check_join_{userId}_{refCode}" — refCode မပါက empty string
+    const cbData = refCode
+      ? `check_join_${ctx.from.id}_${refCode}`
+      : `check_join_${ctx.from.id}_`;
     await ctx.reply(
       `👋 မင်္ဂလာပါ ${ctx.from.first_name}!\n\n` +
       `⚠️ <b>Bot ကို အသုံးပြုရန် ကျွန်ုပ်တို့၏ Channel ကို အရင် Join ပါ။</b>\n\n` +
@@ -690,7 +694,7 @@ function initBot() {
           inline_keyboard: [[
             { text: '📢 Channel Join မည်', url: CHANNEL_LINK },
           ],[
-            { text: 'Joined ✅', callback_data: `check_join_${ctx.from.id}` },
+            { text: 'Joined ✅', callback_data: cbData },
           ]],
         },
       }
@@ -708,7 +712,8 @@ function initBot() {
       if (chatId !== ADMIN_ID) {
         const joined = await isChannelMember(chatId);
         if (!joined) {
-          return sendJoinPrompt(ctx);
+          // Pass referral code so it survives the channel join step
+          return sendJoinPrompt(ctx, startParam);
         }
       }
 
@@ -1077,26 +1082,57 @@ function initBot() {
       await ctx.deleteMessage().catch(() => {});
       await ctx.answerCbQuery('✅ Channel Join ပြီးပါပြီ!');
 
-      // Register user and show welcome
-      const tgUser = ctx.from, chatId = userId, startParam = '';
+      // Extract referral code from callback_data: "check_join_{userId}_{refCode}"
+      const parts    = data.split('_');
+      // format: check | join | {userId} | {refCode or empty}
+      // e.g. "check_join_123456789_ref_987654321" → parts[3..] = refCode
+      const rawRef   = parts.slice(3).join('_'); // handles "ref_12345" format too
+      const startParam = rawRef || '';
+
+      const tgUser = ctx.from, chatId = userId;
       try {
         let user = await User.findOne({ telegramId: chatId });
         if (!user) {
           const myCode = `ref_${chatId}`;
-          user = await User.create({
+          user = new User({
             telegramId: chatId, firstName: tgUser.first_name||'',
             lastName: tgUser.last_name||'', username: tgUser.username||'',
             referralCode: myCode,
           });
+
+          // Process referral if present
+          if (startParam) {
+            const cleanRefId = startParam.replace('ref_', '');
+            if (cleanRefId && cleanRefId !== chatId) {
+              const referrer = await User.findOne({ telegramId: cleanRefId });
+              if (referrer && !referrer.isBanned) {
+                await User.findByIdAndUpdate(referrer._id, {
+                  $inc: { balance: REFERRAL_BONUS, totalEarned: REFERRAL_BONUS, referrals: 1 },
+                });
+                user.referredBy = cleanRefId;
+                // Notify referrer with details
+                await sendTg(cleanRefId,
+                  `🎉 <b>မိတ်ဆွေသစ် တစ်ယောက် ရောက်လာပါပြီ!</b>\n\n` +
+                  `👤 <b>ဖိတ်ကြားခံရသူ:</b> ${tgUser.first_name}${tgUser.username ? ' (@'+tgUser.username+')' : ''}\n` +
+                  `💰 <b>Referral Bonus:</b> ${REFERRAL_BONUS.toLocaleString()} Ks ထည့်ပေးပြီးပါပြီ။\n\n` +
+                  `🔗 ဆက်လက်ဖိတ်ကြားပြီး ပိုမိုသောဆုချီးမြှင့်မှုများ ရယူပါ!`
+                );
+              }
+            }
+          }
+
+          await user.save();
         } else {
           await User.findByIdAndUpdate(user._id, {
-            firstName: tgUser.first_name||user.firstName, lastName: tgUser.last_name||user.lastName,
-            username: tgUser.username||user.username, lastSeen: new Date(), isBlocked: false,
+            firstName: tgUser.first_name||user.firstName,
+            lastName:  tgUser.last_name ||user.lastName,
+            username:  tgUser.username  ||user.username,
+            lastSeen:  new Date(), isBlocked: false,
           });
         }
-        if (user.isBanned) {
-          return ctx.reply(`🚫 Account ပိတ်ထားပါသည်\nအကြောင်း: ${user.banReason}`);
-        }
+
+        if (user.isBanned) return ctx.reply(`🚫 Account ပိတ်ထားပါသည်\nအကြောင်း: ${user.banReason}`);
+
         await ctx.reply(
           `👋 မင်္ဂလာပါ ${tgUser.first_name}\n` +
           `KBZPay Mini App မှ ကြိုဆိုပါသည် 🎉\n\n` +
