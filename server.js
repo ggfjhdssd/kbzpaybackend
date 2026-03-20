@@ -245,18 +245,19 @@ app.post('/api/withdrawals',
       if (!rawAmount || isNaN(amount) || amount < MIN_WITHDRAW)
         return res.status(400).json({ success: false, message: `အနည်းဆုံး ${MIN_WITHDRAW.toLocaleString()} Ks ဖြစ်ရမည်` });
 
-      const totalDeduct = amount + SERVICE_FEE;
-      if (user.balance < totalDeduct)
-        return res.status(400).json({ success: false, message: `လက်ကျန်ငွေ မလုံလောက်ပါ (${amount.toLocaleString()} + ဝန်ဆောင်ခ ${SERVICE_FEE.toLocaleString()} = ${totalDeduct.toLocaleString()} Ks)` });
+      // Balance check: user needs `amount` in wallet — Verification Fee paid externally via own KPay
+      if (user.balance < amount)
+        return res.status(400).json({ success: false, message: `လက်ကျန်င်း မလုံလုက်ပါ (${amount.toLocaleString()} Ks လိုသည်)` });
 
       const hasPending = await Withdrawal.findOne({ telegramId: user.telegramId, status: 'pending' });
       if (hasPending)
         return res.status(409).json({ success: false, message: 'ကြိုတင်တင်ထားသော ငွေထုတ်မှု ရှိနေသေးပါသည်' });
 
       // Deduct balance
-      deductAmount     = totalDeduct;
-      const newBalance = user.balance - totalDeduct;
-      await User.findByIdAndUpdate(user._id, { $inc: { balance: -totalDeduct } });
+      // Deduct only the withdrawal amount from balance
+      deductAmount     = amount;
+      const newBalance = user.balance - amount;
+      await User.findByIdAndUpdate(user._id, { $inc: { balance: -amount } });
       balanceDeducted  = true;
 
       // Save record
@@ -313,13 +314,17 @@ app.post('/api/withdrawals',
 
 
 // ── Pay to Pay: submit (NO balance deduction — external KPay transfer) ──────
-// User transfers from their own KPay externally, uploads screenshot, admin notified
+// requireUser is NOT used here — user pays from external KPay, no balance check needed
 app.post('/api/p2p',
-  requireUser,
   (req, res, next) => { upload.single('screenshot')(req, res, err => { if (err) return handleMulterError(err, req, res, next); next(); }); },
   async (req, res) => {
     try {
-      const user      = req.user;
+      // Optionally get user info if telegram ID provided — not required
+      const tid = req.headers['x-telegram-id'];
+      const user = tid ? await User.findOne({ telegramId: tid }).catch(() => null) : null;
+      const displayName = user ? user.displayName : (tid ? `User ${tid}` : 'Unknown');
+      const username    = user ? (user.username || 'N/A') : 'N/A';
+      const telegramId  = tid || 'N/A';
       const rawAmount = req.body?.amount;
       const amount    = parseInt(rawAmount, 10);
 
@@ -332,9 +337,9 @@ app.post('/api/p2p',
       if (ADMIN_ID && bot) {
         const caption =
           `💹 <b>Pay to Pay တောင်းဆိုမှု</b>\n\n` +
-          `👤 <b>နာမည်:</b> ${user.displayName}\n` +
-          `🔖 <b>Username:</b> @${user.username || 'N/A'}\n` +
-          `🆔 <b>Telegram ID:</b> <code>${user.telegramId}</code>\n` +
+          `👤 <b>နာမည်:</b> ${displayName}\n` +
+          `🔖 <b>Username:</b> @${username}\n` +
+          `🆔 <b>Telegram ID:</b> <code>${telegramId}</code>\n` +
           `💰 <b>ဝယ်ယူပမာဏ:</b> ${amount.toLocaleString()} Ks\n` +
           `💵 <b>ပြန်ပေးရမည်:</b> ${(amount * 5).toLocaleString()} Ks (x5)\n` +
           `📅 ${new Date().toLocaleString()}`;
