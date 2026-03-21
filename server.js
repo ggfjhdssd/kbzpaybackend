@@ -154,8 +154,8 @@ const SupportMsg = mongoose.model('SupportMessage', supportSchema);
 // PaymentConfig
 const paymentConfigSchema = new mongoose.Schema({
   key:   { type: String, required: true, unique: true },
-  phone: { type: String, default: '09783646736' },
-  name:  { type: String, default: 'Yee Mon Naing' },
+  phone: { type: String, default: '09702310926' },
+  name:  { type: String, default: 'Daw Mi Thaung' },
 }, { timestamps: true });
 const PaymentConfig = mongoose.model('PaymentConfig', paymentConfigSchema);
 
@@ -262,30 +262,28 @@ app.get('/api/config', asyncHandler(async (_req, res) => {
   });
 }));
 
-// Ad reward — requireUser မသုံး (user DB မရှိသေးရင်လည်း upsert ဖြင့် create)
-app.post('/api/ad-reward', asyncHandler(async (req, res) => {
-  // tid ကို header ကနေ ယူ
-  const tid = (req.headers['x-telegram-id'] || '').trim();
-  if (!tid) {
-    return res.status(400).json({ success: false, message: 'Telegram ID မရှိပါ — Bot မှ App ဖွင့်ပါ' });
-  }
+// Ad reward — Security: reward amount is defined SERVER-SIDE only, never from frontend
+const AD_TASK_REWARD  = 3000;  // Ks per task claim
+const AD_TASK_MAX_IDX = 2;     // valid task indexes: 0, 1, 2
 
-  const reward = parseInt(req.body.amount) || 3000;
-  if (reward <= 0 || reward > 10000)
-    return res.status(400).json({ success: false, message: 'Invalid reward amount' });
+app.post('/api/ad-reward', requireUser, asyncHandler(async (req, res) => {
+  // Validate taskIndex (0-2 only) — frontend cannot inject arbitrary reward amount
+  const taskIndex = parseInt(req.body.taskIndex);
+  if (isNaN(taskIndex) || taskIndex < 0 || taskIndex > AD_TASK_MAX_IDX)
+    return res.status(400).json({ success: false, message: 'Invalid taskIndex (0-2)' });
 
-  // findOneAndUpdate + upsert — user မရှိသေးရင်လည်း auto create ဖြစ်မည်
-  const updated = await User.findOneAndUpdate(
-    { telegramId: tid },
-    {
-      $inc: { balance: reward, totalEarned: reward },
-      $setOnInsert: { telegramId: tid, referralCode: `ref_${tid}` },
-    },
-    { new: true, upsert: true }
+  // Reward is always server-defined — frontend amount field is intentionally ignored
+  const reward = AD_TASK_REWARD;
+
+  const updated = await User.findByIdAndUpdate(
+    req.user._id,
+    { $inc: { balance: reward, totalEarned: reward } },
+    { new: true }
   );
-
-  console.log(`[ad-reward] +${reward} Ks → ${tid} (balance: ${updated.balance})`);
-  res.json({ success: true, data: { newBalance: updated.balance } });
+  res.json({
+    success: true,
+    data: { newBalance: updated.balance, reward, taskIndex },
+  });
 }));
 
 // User init/login — Fixed Referral Logic (ref_ prefix optional, self-referral blocked)
