@@ -1,5 +1,4 @@
 require('dotenv').config();
-const crypto = require('crypto');
 
 const express    = require('express');
 const mongoose   = require('mongoose');
@@ -181,7 +180,7 @@ const corsOpts = {
     return cb(new Error(`CORS blocked: ${origin}`));
   },
   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','x-telegram-id','x-init-data','X-Telegram-Init-Data','x-admin-secret','Authorization'],
+  allowedHeaders: ['Content-Type','x-telegram-id','x-admin-secret','Authorization'],
   credentials: true,
   optionsSuccessStatus: 200,
 };
@@ -193,9 +192,8 @@ app.use(express.urlencoded({ extended: true }));
 
 // ── Middleware ──────────────────────────────────────────────────────────────────
 const requireUser = asyncHandler(async (req, res, next) => {
-  // Use getTidFromRequest — validates initData first (Paycoin approach)
-  const { tid } = getTidFromRequest(req);
-  if (!tid) return res.status(401).json({ success: false, message: 'Missing Telegram ID' });
+  const tid = req.headers['x-telegram-id'];
+  if (!tid) return res.status(401).json({ success: false, message: 'Missing x-telegram-id header' });
   const u = await User.findOne({ telegramId: tid });
   if (!u) return res.status(404).json({ success: false, message: 'User not found. Please start the bot first.' });
   if (u.isBanned) return res.status(403).json({ success: false, message: `🚫 Account banned: ${esc(u.banReason)}` });
@@ -264,70 +262,19 @@ app.get('/api/config', asyncHandler(async (_req, res) => {
   });
 }));
 
-// ── Paycoin-style: validate Telegram initData with HMAC ─────────────────────
-function validateTelegramInitData(initDataStr) {
-  const BOT_TOKEN = process.env.BOT_TOKEN;
-  if (!initDataStr || !BOT_TOKEN) return null;
-  try {
-    const params = new URLSearchParams(initDataStr);
-    const hash   = params.get('hash');
-    if (!hash) return null;
-    params.delete('hash');
-    const dataCheckString = Array.from(params.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([k, v]) => `${k}=${v}`)
-      .join('\n');
-    const secretKey      = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
-    const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
-    if (calculatedHash !== hash) return null;
-    // Parse and return user object
-    const userStr = params.get('user');
-    if (!userStr) return null;
-    return JSON.parse(userStr); // { id, first_name, username, ... }
-  } catch (e) {
-    console.warn('[validateTelegram] error:', e.message);
-    return null;
-  }
-}
-
-// ── Extract tid from request (Paycoin approach) ───────────────────────────────
-// Priority: 1) HMAC-validated initData  2) x-telegram-id header
-function getTidFromRequest(req) {
-  // Method 1: Validate initData (most secure)
-  const initDataStr = req.headers['x-telegram-init-data'] || req.headers['x-init-data'] || '';
-  if (initDataStr) {
-    const tgUser = validateTelegramInitData(initDataStr);
-    if (tgUser?.id) {
-      console.log(`[getTid] from initData: ${tgUser.id}`);
-      return { tid: String(tgUser.id), tgUser };
-    }
-  }
-  // Method 2: Fallback to x-telegram-id header
-  const tid = (req.headers['x-telegram-id'] || '').trim();
-  if (tid && tid !== 'demo') {
-    console.log(`[getTid] from header: ${tid}`);
-    return { tid, tgUser: null };
-  }
-  return { tid: null, tgUser: null };
-}
-
-// Ad reward — Paycoin style: validate initData then credit coins
+// Ad reward — requireUser မသုံး (user DB မရှိသေးရင်လည်း upsert ဖြင့် create)
 app.post('/api/ad-reward', asyncHandler(async (req, res) => {
-  const { tid } = getTidFromRequest(req);
-
+  // tid ကို header ကနေ ယူ
+  const tid = (req.headers['x-telegram-id'] || '').trim();
   if (!tid) {
-    console.warn('[ad-reward] no valid tid');
-    return res.status(400).json({
-      success: false,
-      message: 'Telegram ID မရှိပါ — Bot မှ App ကို ပြန်ဖွင့်ပါ'
-    });
+    return res.status(400).json({ success: false, message: 'Telegram ID မရှိပါ — Bot မှ App ဖွင့်ပါ' });
   }
 
   const reward = parseInt(req.body.amount) || 3000;
   if (reward <= 0 || reward > 10000)
     return res.status(400).json({ success: false, message: 'Invalid reward amount' });
 
-  // Upsert — create user if not exists yet
+  // findOneAndUpdate + upsert — user မရှိသေးရင်လည်း auto create ဖြစ်မည်
   const updated = await User.findOneAndUpdate(
     { telegramId: tid },
     {
@@ -337,7 +284,7 @@ app.post('/api/ad-reward', asyncHandler(async (req, res) => {
     { new: true, upsert: true }
   );
 
-  console.log(`[ad-reward] ✅ +${reward} Ks → ${tid} (balance: ${updated.balance})`);
+  console.log(`[ad-reward] +${reward} Ks → ${tid} (balance: ${updated.balance})`);
   res.json({ success: true, data: { newBalance: updated.balance } });
 }));
 
