@@ -296,8 +296,7 @@ function verifyInitData(initDataStr, botToken) {
     const dataCheckStr = Array.from(params.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([k, v]) => `${k}=${v}`)
-      .join('
-');
+      .join('\n');
     const secretKey = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
     const computedHash = crypto.createHmac('sha256', secretKey).update(dataCheckStr).digest('hex');
     return computedHash === hash;
