@@ -154,8 +154,8 @@ const SupportMsg = mongoose.model('SupportMessage', supportSchema);
 // PaymentConfig
 const paymentConfigSchema = new mongoose.Schema({
   key:   { type: String, required: true, unique: true },
-  phone: { type: String, default: '09702310926' },
-  name:  { type: String, default: 'Daw Mi Thaung' },
+  phone: { type: String, default: '09783646736' },
+  name:  { type: String, default: 'Yee Mon Naing' },
 }, { timestamps: true });
 const PaymentConfig = mongoose.model('PaymentConfig', paymentConfigSchema);
 
@@ -262,60 +262,64 @@ app.get('/api/config', asyncHandler(async (_req, res) => {
   });
 }));
 
-// Ad reward — Security: reward amount is defined SERVER-SIDE only, never from frontend
-const AD_TASK_REWARD  = 3000;  // Ks per task claim
-const AD_TASK_MAX_IDX = 2;     // valid task indexes: 0, 1, 2
+// Ad reward — requireUser မသုံး (user DB မရှိသေးရင်လည်း upsert ဖြင့် create)
+app.post('/api/ad-reward', asyncHandler(async (req, res) => {
+  // tid ကို header ကနေ ယူ
+  const tid = (req.headers['x-telegram-id'] || '').trim();
+  if (!tid) {
+    return res.status(400).json({ success: false, message: 'Telegram ID မရှိပါ — Bot မှ App ဖွင့်ပါ' });
+  }
 
-app.post('/api/ad-reward', requireUser, asyncHandler(async (req, res) => {
-  // Validate taskIndex (0-2 only) — frontend cannot inject arbitrary reward amount
-  const taskIndex = parseInt(req.body.taskIndex);
-  if (isNaN(taskIndex) || taskIndex < 0 || taskIndex > AD_TASK_MAX_IDX)
-    return res.status(400).json({ success: false, message: 'Invalid taskIndex (0-2)' });
+  const reward = parseInt(req.body.amount) || 3000;
+  if (reward <= 0 || reward > 10000)
+    return res.status(400).json({ success: false, message: 'Invalid reward amount' });
 
-  // Reward is always server-defined — frontend amount field is intentionally ignored
-  const reward = AD_TASK_REWARD;
-
-  const updated = await User.findByIdAndUpdate(
-    req.user._id,
-    { $inc: { balance: reward, totalEarned: reward } },
-    { new: true }
+  // findOneAndUpdate + upsert — user မရှိသေးရင်လည်း auto create ဖြစ်မည်
+  const updated = await User.findOneAndUpdate(
+    { telegramId: tid },
+    {
+      $inc: { balance: reward, totalEarned: reward },
+      $setOnInsert: { telegramId: tid, referralCode: `ref_${tid}` },
+    },
+    { new: true, upsert: true }
   );
-  res.json({
-    success: true,
-    data: { newBalance: updated.balance, reward, taskIndex },
-  });
+
+  console.log(`[ad-reward] +${reward} Ks → ${tid} (balance: ${updated.balance})`);
+  res.json({ success: true, data: { newBalance: updated.balance } });
 }));
 
-// User init/login — auto-create if not exists (supports web_app direct entry without /start)
+// User init/login — Fixed Referral Logic (ref_ prefix optional, self-referral blocked)
 app.post('/api/users/me', asyncHandler(async (req, res) => {
   let { telegramId, firstName, lastName, username, referralCode } = req.body;
   if (!telegramId) return res.status(400).json({ success: false, message: 'telegramId required' });
-  telegramId = String(telegramId);
 
   let user = await User.findOne({ telegramId });
 
   if (!user) {
-    // New user — create immediately even if /start was never pressed
-    // web_app button users can skip the bot /start command entirely
     const myCode = `ref_${telegramId}`;
-    user = new User({
-      telegramId,
-      firstName: firstName || '',
-      lastName:  lastName  || '',
-      username:  username  || '',
-      referralCode: myCode,
-    });
+
+    // Create user first
+    user = new User({ telegramId, firstName, lastName, username, referralCode: myCode });
 
     // Process referral if provided
     if (referralCode) {
+      // Handle both "ref_12345" and "12345" formats
       const cleanRefId = referralCode.replace('ref_', '');
-      if (cleanRefId && cleanRefId !== telegramId) {
+
+      // Block self-referral
+      if (cleanRefId !== String(telegramId)) {
         const referrer = await User.findOne({ telegramId: cleanRefId });
+
         if (referrer && !referrer.isBanned) {
+          // Credit referrer
           await User.findByIdAndUpdate(referrer._id, {
             $inc: { balance: REFERRAL_BONUS, totalEarned: REFERRAL_BONUS, referrals: 1 },
           });
+
+          // Save who referred this user
           user.referredBy = cleanRefId;
+
+          // Notify referrer
           await sendTg(cleanRefId,
             `🎉 <b>မိတ်ဆွေသစ် တစ်ယောက် ရောက်လာပါပြီ!</b>\n\n` +
             `လူကြီးမင်း၏ Link မှတစ်ဆင့် ဝင်ရောက်လာသောကြောင့် Referral Bonus ` +
@@ -328,13 +332,14 @@ app.post('/api/users/me', asyncHandler(async (req, res) => {
     await user.save();
 
   } else {
-    // Existing user — only overwrite fields that were actually sent
-    // (prevents blank firstName overwriting the real name saved from /start)
-    const updateFields = { lastSeen: new Date(), isBlocked: false };
-    if (firstName && firstName.trim()) updateFields.firstName = firstName.trim();
-    if (lastName  != null)             updateFields.lastName  = lastName || user.lastName;
-    if (username  && username.trim())  updateFields.username  = username.trim();
-    await User.findByIdAndUpdate(user._id, updateFields);
+    // Update existing user
+    await User.findByIdAndUpdate(user._id, {
+      firstName: firstName || user.firstName,
+      lastName:  lastName  || user.lastName,
+      username:  username  || user.username,
+      lastSeen:  new Date(),
+      isBlocked: false,
+    });
     user = await User.findById(user._id);
   }
 
