@@ -262,24 +262,30 @@ app.get('/api/config', asyncHandler(async (_req, res) => {
   });
 }));
 
-// Ad reward — requireUser မသုံး၊ tid ကနေ directly find
+// Ad reward — no requireUser, find by tid directly
 app.post('/api/ad-reward', asyncHandler(async (req, res) => {
   const tid = req.headers['x-telegram-id'];
-  if (!tid) return res.status(400).json({ success: false, message: 'x-telegram-id header လိုအပ်သည်' });
+  if (!tid || tid === 'demo') {
+    console.warn('[ad-reward] Missing or demo tid');
+    return res.status(400).json({ success: false, message: 'Telegram ID မရှိပါ — Bot မှ App ဖွင့်ပါ' });
+  }
 
   const reward = parseInt(req.body.amount) || 3000;
   if (reward <= 0 || reward > 10000)
     return res.status(400).json({ success: false, message: 'Invalid reward amount' });
 
-  // Upsert — user မရှိသေးရင်လည်း create လုပ်မည် မဟုတ်ဘဲ update only
   const updated = await User.findOneAndUpdate(
     { telegramId: tid },
     { $inc: { balance: reward, totalEarned: reward } },
     { new: true }
   );
-  if (!updated)
-    return res.status(404).json({ success: false, message: 'User not found — bot ကို /start နှိပ်ပါ' });
 
+  if (!updated) {
+    console.warn(`[ad-reward] User not found: ${tid}`);
+    return res.status(404).json({ success: false, message: 'User မတွေ့ပါ — Bot ကို /start နှိပ်ပြီး App ဖွင့်ပါ' });
+  }
+
+  console.log(`[ad-reward] +${reward} Ks → ${tid} (new balance: ${updated.balance})`);
   res.json({ success: true, data: { newBalance: updated.balance } });
 }));
 
