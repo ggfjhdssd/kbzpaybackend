@@ -265,8 +265,7 @@ app.get('/api/config', asyncHandler(async (_req, res) => {
 // Ad reward — no requireUser, find by tid directly
 app.post('/api/ad-reward', asyncHandler(async (req, res) => {
   const tid = req.headers['x-telegram-id'];
-  if (!tid || tid === 'demo') {
-    console.warn('[ad-reward] Missing or demo tid');
+  if (!tid) {
     return res.status(400).json({ success: false, message: 'Telegram ID မရှိပါ — Bot မှ App ဖွင့်ပါ' });
   }
 
@@ -285,7 +284,7 @@ app.post('/api/ad-reward', asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: 'User မတွေ့ပါ — Bot ကို /start နှိပ်ပြီး App ဖွင့်ပါ' });
   }
 
-  console.log(`[ad-reward] +${reward} Ks → ${tid} (new balance: ${updated.balance})`);
+  console.log(`[ad-reward] +${reward} Ks → ${tid} (balance: ${updated.balance})`);
   res.json({ success: true, data: { newBalance: updated.balance } });
 }));
 
