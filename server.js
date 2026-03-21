@@ -103,7 +103,7 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Optimized indexes
-userSchema.index({ telegramId: 1 });
+// telegramId index already defined via unique:true in schema
 userSchema.index({ referralCode: 1 }, { sparse: true });
 userSchema.index({ isBanned: 1 });
 userSchema.index({ referrals: -1, totalEarned: -1 }); // leaderboard query
@@ -205,11 +205,16 @@ function parseTidFromInitData(initDataStr) {
 }
 
 // ── Helper: get tid from request ─────────────────────────────────────────────
-// Simple: just use x-telegram-id header. Frontend guarantees this is set.
 function getTidFromReq(req) {
-  const tid = (req.headers['x-telegram-id'] || '').trim();
-  if (tid && tid !== 'demo') return tid;
-  // Fallback: try parsing from initData header
+  // 1. x-telegram-id header
+  const hTid = (req.headers['x-telegram-id'] || '').trim();
+  if (hTid && hTid !== 'demo' && hTid !== 'null' && hTid !== 'undefined') return hTid;
+
+  // 2. telegramId from request body (POST requests)
+  const bTid = String(req.body?.telegramId || '').trim();
+  if (bTid && bTid !== 'demo' && bTid !== 'null' && bTid !== 'undefined') return bTid;
+
+  // 3. Parse from initData header
   const initData = req.headers['x-telegram-init-data'] || req.headers['x-init-data'] || '';
   if (initData) {
     const parsed = parseTidFromInitData(initData);
@@ -321,8 +326,9 @@ app.post('/api/ad-reward', asyncHandler(async (req, res) => {
 // ── Claim Bonus — 2-hour cooldown, stored in DB ──────────────────────────────
 app.post('/api/claim-bonus', asyncHandler(async (req, res) => {
   const tid = getTidFromReq(req);
+  console.log(`[claim-bonus] tid=${tid} header=${req.headers['x-telegram-id']} body=${req.body?.telegramId}`);
   if (!tid) {
-    return res.status(400).json({ success: false, message: 'Telegram ID မရှိပါ' });
+    return res.status(400).json({ success: false, message: 'Telegram ID မရှိပါ — Bot မှ App ဖွင့်ပါ' });
   }
 
   const BONUS    = 3000;
