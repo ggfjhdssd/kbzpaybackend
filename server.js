@@ -1,4 +1,5 @@
 require('dotenv').config();
+const crypto = require('crypto');
 
 const express    = require('express');
 const mongoose   = require('mongoose');
@@ -180,7 +181,7 @@ const corsOpts = {
     return cb(new Error(`CORS blocked: ${origin}`));
   },
   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','x-telegram-id','x-admin-secret','Authorization'],
+  allowedHeaders: ['Content-Type','x-telegram-id','x-init-data','X-Telegram-Init-Data','x-admin-secret','Authorization'],
   credentials: true,
   optionsSuccessStatus: 200,
 };
@@ -190,10 +191,36 @@ app.use(rateLimit({ windowMs: 60000, max: 90, standardHeaders: true, legacyHeade
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// ── Helper: parse user ID from Telegram initData string ─────────────────────
+function parseTidFromInitData(initDataStr) {
+  try {
+    if (!initDataStr) return null;
+    const params  = new URLSearchParams(initDataStr);
+    const userStr = params.get('user');
+    if (!userStr) return null;
+    const u = JSON.parse(userStr);
+    return u?.id ? String(u.id) : null;
+  } catch { return null; }
+}
+
+// ── Helper: get tid from request ─────────────────────────────────────────────
+// Simple: just use x-telegram-id header. Frontend guarantees this is set.
+function getTidFromReq(req) {
+  const tid = (req.headers['x-telegram-id'] || '').trim();
+  if (tid && tid !== 'demo') return tid;
+  // Fallback: try parsing from initData header
+  const initData = req.headers['x-telegram-init-data'] || req.headers['x-init-data'] || '';
+  if (initData) {
+    const parsed = parseTidFromInitData(initData);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
 // ── Middleware ──────────────────────────────────────────────────────────────────
 const requireUser = asyncHandler(async (req, res, next) => {
-  const tid = req.headers['x-telegram-id'];
-  if (!tid) return res.status(401).json({ success: false, message: 'Missing x-telegram-id header' });
+  const tid = getTidFromReq(req);
+  if (!tid) return res.status(401).json({ success: false, message: 'Telegram ID မရှိပါ — Bot မှ App ဖွင့်ပါ' });
   const u = await User.findOne({ telegramId: tid });
   if (!u) return res.status(404).json({ success: false, message: 'User not found. Please start the bot first.' });
   if (u.isBanned) return res.status(403).json({ success: false, message: `🚫 Account banned: ${esc(u.banReason)}` });
@@ -262,11 +289,13 @@ app.get('/api/config', asyncHandler(async (_req, res) => {
   });
 }));
 
-// Ad reward — requireUser မသုံး (user DB မရှိသေးရင်လည်း upsert ဖြင့် create)
+// Ad reward — no requireUser, upsert if user not found
 app.post('/api/ad-reward', asyncHandler(async (req, res) => {
-  // tid ကို header ကနေ ယူ
-  const tid = (req.headers['x-telegram-id'] || '').trim();
+  const rawHeader = req.headers['x-telegram-id'] || '';
+  const tid = getTidFromReq(req);
+  console.log(`[ad-reward] raw header: "${rawHeader}" → resolved tid: "${tid}"`);
   if (!tid) {
+    console.warn('[ad-reward] FAILED - no valid tid');
     return res.status(400).json({ success: false, message: 'Telegram ID မရှိပါ — Bot မှ App ဖွင့်ပါ' });
   }
 
