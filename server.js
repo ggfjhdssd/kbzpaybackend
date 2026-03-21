@@ -286,38 +286,36 @@ app.post('/api/ad-reward', requireUser, asyncHandler(async (req, res) => {
   });
 }));
 
-// User init/login — Fixed Referral Logic (ref_ prefix optional, self-referral blocked)
+// User init/login — auto-create if not exists (supports web_app direct entry without /start)
 app.post('/api/users/me', asyncHandler(async (req, res) => {
   let { telegramId, firstName, lastName, username, referralCode } = req.body;
   if (!telegramId) return res.status(400).json({ success: false, message: 'telegramId required' });
+  telegramId = String(telegramId);
 
   let user = await User.findOne({ telegramId });
 
   if (!user) {
+    // New user — create immediately even if /start was never pressed
+    // web_app button users can skip the bot /start command entirely
     const myCode = `ref_${telegramId}`;
-
-    // Create user first
-    user = new User({ telegramId, firstName, lastName, username, referralCode: myCode });
+    user = new User({
+      telegramId,
+      firstName: firstName || '',
+      lastName:  lastName  || '',
+      username:  username  || '',
+      referralCode: myCode,
+    });
 
     // Process referral if provided
     if (referralCode) {
-      // Handle both "ref_12345" and "12345" formats
       const cleanRefId = referralCode.replace('ref_', '');
-
-      // Block self-referral
-      if (cleanRefId !== String(telegramId)) {
+      if (cleanRefId && cleanRefId !== telegramId) {
         const referrer = await User.findOne({ telegramId: cleanRefId });
-
         if (referrer && !referrer.isBanned) {
-          // Credit referrer
           await User.findByIdAndUpdate(referrer._id, {
             $inc: { balance: REFERRAL_BONUS, totalEarned: REFERRAL_BONUS, referrals: 1 },
           });
-
-          // Save who referred this user
           user.referredBy = cleanRefId;
-
-          // Notify referrer
           await sendTg(cleanRefId,
             `🎉 <b>မိတ်ဆွေသစ် တစ်ယောက် ရောက်လာပါပြီ!</b>\n\n` +
             `လူကြီးမင်း၏ Link မှတစ်ဆင့် ဝင်ရောက်လာသောကြောင့် Referral Bonus ` +
@@ -330,14 +328,13 @@ app.post('/api/users/me', asyncHandler(async (req, res) => {
     await user.save();
 
   } else {
-    // Update existing user
-    await User.findByIdAndUpdate(user._id, {
-      firstName: firstName || user.firstName,
-      lastName:  lastName  || user.lastName,
-      username:  username  || user.username,
-      lastSeen:  new Date(),
-      isBlocked: false,
-    });
+    // Existing user — only overwrite fields that were actually sent
+    // (prevents blank firstName overwriting the real name saved from /start)
+    const updateFields = { lastSeen: new Date(), isBlocked: false };
+    if (firstName && firstName.trim()) updateFields.firstName = firstName.trim();
+    if (lastName  != null)             updateFields.lastName  = lastName || user.lastName;
+    if (username  && username.trim())  updateFields.username  = username.trim();
+    await User.findByIdAndUpdate(user._id, updateFields);
     user = await User.findById(user._id);
   }
 
