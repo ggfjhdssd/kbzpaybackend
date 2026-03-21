@@ -154,8 +154,8 @@ const SupportMsg = mongoose.model('SupportMessage', supportSchema);
 // PaymentConfig
 const paymentConfigSchema = new mongoose.Schema({
   key:   { type: String, required: true, unique: true },
-  phone: { type: String, default: '09702310926' },
-  name:  { type: String, default: 'Daw Mi Thaung' },
+  phone: { type: String, default: '09783646736' },
+  name:  { type: String, default: 'Yee Mon Naing' },
 }, { timestamps: true });
 const PaymentConfig = mongoose.model('PaymentConfig', paymentConfigSchema);
 
