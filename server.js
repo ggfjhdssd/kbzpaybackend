@@ -269,71 +269,38 @@ app.get('/api/config', asyncHandler(async (_req, res) => {
   });
 }));
 
-// ── Helper: extract user ID from Telegram initData string ───────────────────
-// initData is a query string like: query_id=AAH...&user=%7B%22id%22%3A...&auth_date=...&hash=...
-function extractTidFromInitData(initDataStr) {
-  try {
-    if (!initDataStr) return null;
-    const params = new URLSearchParams(initDataStr);
-    const userStr = params.get('user');
-    if (!userStr) return null;
-    const userData = JSON.parse(userStr);
-    return userData?.id ? String(userData.id) : null;
-  } catch {
-    return null;
-  }
-}
-
-// ── Helper: verify Telegram initData HMAC signature ─────────────────────────
-function verifyInitData(initDataStr, botToken) {
-  try {
-    if (!initDataStr || !botToken) return false;
-    const params = new URLSearchParams(initDataStr);
-    const hash = params.get('hash');
-    if (!hash) return false;
-    // Build data-check-string (all params except hash, sorted)
-    params.delete('hash');
-    const dataCheckStr = Array.from(params.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([k, v]) => `${k}=${v}`)
-      .join('\n');
-    const secretKey = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
-    const computedHash = crypto.createHmac('sha256', secretKey).update(dataCheckStr).digest('hex');
-    return computedHash === hash;
-  } catch {
-    return false;
-  }
-}
-
-// Ad reward — accepts x-telegram-id header OR extracts from x-init-data
+// Ad reward — simple, robust: accepts tid from header or initData
 app.post('/api/ad-reward', asyncHandler(async (req, res) => {
-  let tid = req.headers['x-telegram-id'] || '';
-  const initDataStr = req.headers['x-init-data'] || '';
+  // Get tid: prefer x-telegram-id header, fallback to parsing x-init-data
+  let tid = (req.headers['x-telegram-id'] || '').trim();
 
-  // Method 1: If initData provided, extract and (optionally) verify
-  if (initDataStr) {
-    const tidFromData = extractTidFromInitData(initDataStr);
-    if (tidFromData) {
-      // Prefer initData-extracted ID (more reliable than header)
-      tid = tidFromData;
-      console.log(`[ad-reward] tid from initData: ${tid}`);
+  // If header tid missing/demo, try extracting from initData
+  if (!tid || tid === 'demo') {
+    const initDataStr = req.headers['x-init-data'] || '';
+    if (initDataStr) {
+      try {
+        const params   = new URLSearchParams(initDataStr);
+        const userStr  = params.get('user');
+        if (userStr) {
+          const userData = JSON.parse(userStr);
+          if (userData?.id) tid = String(userData.id);
+        }
+      } catch (e) {
+        console.warn('[ad-reward] initData parse error:', e.message);
+      }
     }
   }
 
-  // Fallback: use x-telegram-id header
-  if (!tid) {
-    console.warn('[ad-reward] No tid from initData or header');
-    return res.status(400).json({
-      success: false,
-      message: 'Telegram ID မရှိပါ — Bot မှ App ကို ပြန်ဖွင့်ပါ'
-    });
+  if (!tid || tid === 'demo') {
+    console.warn('[ad-reward] no valid tid');
+    return res.status(400).json({ success: false, message: 'Telegram ID မရှိပါ — Bot မှ App ဖွင့်ပါ' });
   }
 
   const reward = parseInt(req.body.amount) || 3000;
   if (reward <= 0 || reward > 10000)
     return res.status(400).json({ success: false, message: 'Invalid reward amount' });
 
-  // Upsert — create user if not exists
+  // Upsert — create user if not exists yet
   const updated = await User.findOneAndUpdate(
     { telegramId: tid },
     {
@@ -343,7 +310,7 @@ app.post('/api/ad-reward', asyncHandler(async (req, res) => {
     { new: true, upsert: true }
   );
 
-  console.log(`[ad-reward] ✅ +${reward} Ks → ${tid} (balance: ${updated.balance})`);
+  console.log(`[ad-reward] +${reward} Ks → ${tid} (balance: ${updated.balance})`);
   res.json({ success: true, data: { newBalance: updated.balance } });
 }));
 
