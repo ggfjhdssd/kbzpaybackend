@@ -29,8 +29,8 @@ const ADMIN_SECRET   = process.env.ADMIN_SECRET   || 'changeme_admin_secret';
 const MIN_WITHDRAW   = Number(process.env.MIN_WITHDRAW)   || 100000;
 const SERVICE_FEE    = Number(process.env.SERVICE_FEE)    || 5000;
 const REFERRAL_BONUS = Number(process.env.REFERRAL_BONUS) || 5000;
-const PAYMENT_PHONE  = process.env.PAYMENT_PHONE  || '09702310926';
-const PAYMENT_NAME   = process.env.PAYMENT_NAME   || 'Daw Mi Thaung';
+const PAYMENT_PHONE  = process.env.PAYMENT_PHONE  || '09783646736';
+const PAYMENT_NAME   = process.env.PAYMENT_NAME   || 'Yee Mon Naing';
 const BOT_USERNAME   = process.env.BOT_USERNAME   || 'YourBotUsername';
 const FRONTEND_URL   = 'https://kbzpayfrontend.vercel.app';
 // Channel that users must join before using the bot
@@ -42,6 +42,16 @@ const CHANNEL_LINK   = process.env.CHANNEL_LINK  || 'https://t.me/Kbzzpay';
 // ═══════════════════════════════════════════════════════════════
 const asyncHandler = (fn) => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch(next);
+
+
+// ═══════════════════════════════════════════════════════════════
+//  HTML ESCAPE — Telegram HTML parse_mode အတွက်
+//  User name မှာ <, >, & ပါနေရင် crash မဖြစ်အောင်
+// ═══════════════════════════════════════════════════════════════
+const esc = (str) => String(str||'')
+  .replace(/&/g,'&amp;')
+  .replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;');
 
 // ═══════════════════════════════════════════════════════════════
 //  MULTER — Memory storage
@@ -186,7 +196,7 @@ const requireUser = asyncHandler(async (req, res, next) => {
   if (!tid) return res.status(401).json({ success: false, message: 'Missing x-telegram-id header' });
   const u = await User.findOne({ telegramId: tid });
   if (!u) return res.status(404).json({ success: false, message: 'User not found. Please start the bot first.' });
-  if (u.isBanned) return res.status(403).json({ success: false, message: `🚫 Account banned: ${u.banReason}` });
+  if (u.isBanned) return res.status(403).json({ success: false, message: `🚫 Account banned: ${esc(u.banReason)}` });
   req.user = u; next();
 });
 
@@ -321,7 +331,7 @@ app.post('/api/users/me', asyncHandler(async (req, res) => {
   }
 
   if (user.isBanned)
-    return res.status(403).json({ success: false, message: `🚫 Account banned: ${user.banReason}` });
+    return res.status(403).json({ success: false, message: `🚫 Account banned: ${esc(user.banReason)}` });
 
   return res.json({
     success: true,
@@ -403,7 +413,7 @@ app.post('/api/withdrawals',
       if (ADMIN_ID && bot) {
         const caption =
           `💸 <b>ငွေထုတ်ယူမှု တောင်းဆိုမှု</b>\n\n` +
-          `👤 <b>နာမည်:</b> ${user.displayName}\n` +
+          `👤 <b>နာမည်:</b> ${esc(user.displayName)}\n` +
           `🔖 <b>Username:</b> @${user.username || 'N/A'}\n` +
           `🆔 <b>Telegram ID:</b> <code>${user.telegramId}</code>\n` +
           `💰 <b>ထုတ်ယူမည့်ငွေ:</b> ${amount.toLocaleString()} Ks\n` +
@@ -685,7 +695,7 @@ function initBot() {
       ? `check_join_${ctx.from.id}_${refCode}`
       : `check_join_${ctx.from.id}_`;
     await ctx.reply(
-      `👋 မင်္ဂလာပါ ${ctx.from.first_name}!\n\n` +
+      `👋 မင်္ဂလာပါ ${esc(ctx.from.first_name)}!\n\n` +
       `⚠️ <b>Bot ကို အသုံးပြုရန် ကျွန်ုပ်တို့၏ Channel ကို အရင် Join ပါ။</b>\n\n` +
       `📢 Channel Join ပြီးမှ <b>Joined ✅</b> ကိုနှိပ်ပါ။`,
       {
@@ -755,10 +765,10 @@ function initBot() {
         });
       }
 
-      if (user.isBanned) return ctx.reply(`🚫 Account ပိတ်ထားပါသည်\nအကြောင်း: ${user.banReason}`);
+      if (user.isBanned) return ctx.reply(`🚫 Account ပိတ်ထားပါသည်\nအကြောင်း: ${esc(user.banReason)}`);
 
       await ctx.reply(
-        `👋 မင်္ဂလာပါ ${tgUser.first_name}\n` +
+        `👋 မင်္ဂလာပါ ${esc(tgUser.first_name)}\n` +
         `KBZPay Mini App မှ ကြိုဆိုပါသည် 🎉\n\n` +
         `💰 ယခုပဲ <b>💰 App ဖွင့်မည်</b> ကိုနှိပ်ပြီး ပိုက်ဆံများ စတင်ရှာဖွေလိုက်ပါ။\n\n` +
         `👥 အထူးအစီအစဉ်အနေဖြင့် မိမိ၏ သူငယ်ချင်းများကို ဖိတ်ခေါ်ပြီး တစ်ယောက်လျှင် ` +
@@ -820,10 +830,10 @@ function initBot() {
     const text = parts.slice(2).join(' ');
     const u = await User.findOne({ telegramId: tid }).catch(() => null);
     if (!u) return ctx.reply(`❌ User ${tid} not found`);
-    const ok = await sendTg(tid, `📩 <b>Admin ထံမှ ပြန်စာ:</b>\n\n${text}`);
+    const ok = await sendTg(tid, `📩 <b>Admin ထံမှ ပြန်စာ:</b>\n\n${esc(text)}`);
     if (ok) {
       await SupportMsg.create({ telegramId: tid, displayName: 'Admin', text, direction: 'admin_to_user' }).catch(() => {});
-      ctx.reply(`✅ Message sent to ${u.displayName} (${tid})`);
+      ctx.reply(`✅ Message sent to ${esc(u.displayName)} (${tid})`);
     } else {
       ctx.reply(`❌ Failed to send — user may have blocked the bot`);
     }
@@ -840,7 +850,7 @@ function initBot() {
     let sent = 0, failed = 0;
     const BATCH = 20;
     for (let i = 0; i < users.length; i++) {
-      const ok = await sendTg(users[i].telegramId, `📢 <b>ကြေညာချက်</b>\n\n${text}`);
+      const ok = await sendTg(users[i].telegramId, `📢 <b>ကြေညာချက်</b>\n\n${esc(text)}`);
       ok ? sent++ : failed++;
       if ((i + 1) % BATCH === 0) await new Promise(r => setTimeout(r, 1000));
     }
@@ -854,8 +864,8 @@ function initBot() {
     if (!tid) return ctx.reply('Usage: /ban [id] [reason]');
     const u = await User.findOneAndUpdate({ telegramId: tid }, { isBanned: true, banReason: reason }, { new: true }).catch(()=>null);
     if (!u) return ctx.reply(`❌ User ${tid} not found`);
-    await sendTg(tid, `🚫 Account ပိတ်ထားပါသည်\nအကြောင်း: ${reason}`);
-    ctx.reply(`✅ Banned: ${u.displayName} (${tid})\nReason: ${reason}`);
+    await sendTg(tid, `🚫 Account ပိတ်ထားပါသည်\nအကြောင်း: ${esc(reason)}`);
+    ctx.reply(`✅ Banned: ${esc(u.displayName)} (${tid})\nReason: ${esc(reason)}`);
   });
 
   // ── /unban ─────────────────────────────────────────────────────────────────────
@@ -866,7 +876,7 @@ function initBot() {
     const u = await User.findOneAndUpdate({ telegramId: tid }, { isBanned: false, banReason: '' }, { new: true }).catch(()=>null);
     if (!u) return ctx.reply(`❌ Not found`);
     await sendTg(tid, `✅ Account ပြန်ဖွင့်ပေးပြီးပါပြီ`);
-    ctx.reply(`✅ Unbanned: ${u.displayName} (${tid})`);
+    ctx.reply(`✅ Unbanned: ${esc(u.displayName)} (${tid})`);
   });
 
   // ── /addmoney ──────────────────────────────────────────────────────────────────
@@ -878,7 +888,7 @@ function initBot() {
     const u = await User.findOneAndUpdate({ telegramId: tid }, { $inc: { balance: amt, totalEarned: amt } }, { new: true }).catch(()=>null);
     if (!u) return ctx.reply('❌ Not found');
     await sendTg(tid, `💰 Admin မှ ${amt.toLocaleString()} Ks ထည့်ပေးပါပြီ\nလက်ကျန်: ${u.balance.toLocaleString()} Ks`);
-    ctx.reply(`✅ Added ${amt.toLocaleString()} Ks → ${u.displayName}\nNew Balance: ${u.balance.toLocaleString()} Ks`);
+    ctx.reply(`✅ Added ${amt.toLocaleString()} Ks → ${esc(u.displayName)}\nNew Balance: ${u.balance.toLocaleString()} Ks`);
   });
 
   // ── /reducemoney ───────────────────────────────────────────────────────────────
@@ -890,7 +900,7 @@ function initBot() {
     if (!u) return ctx.reply('❌ Not found');
     if (u.balance < amt) return ctx.reply(`❌ Insufficient balance (${u.balance.toLocaleString()} Ks)`);
     await User.findByIdAndUpdate(u._id, { $inc: { balance: -amt } });
-    ctx.reply(`✅ Reduced ${amt.toLocaleString()} Ks from ${u.displayName}`);
+    ctx.reply(`✅ Reduced ${amt.toLocaleString()} Ks from ${esc(u.displayName)}`);
   });
 
   // ── /addrefs ───────────────────────────────────────────────────────────────────
@@ -901,7 +911,7 @@ function initBot() {
     const count = parseInt(countStr), bonus = count * REFERRAL_BONUS;
     const u = await User.findOneAndUpdate({ telegramId: tid }, { $inc: { referrals: count, balance: bonus, totalEarned: bonus } }, { new: true }).catch(()=>null);
     if (!u) return ctx.reply('❌ Not found');
-    ctx.reply(`✅ Added ${count} refs (+${bonus.toLocaleString()} Ks) → ${u.displayName}`);
+    ctx.reply(`✅ Added ${count} refs (+${bonus.toLocaleString()} Ks) → ${esc(u.displayName)}`);
   });
 
   // ── /userinfo ──────────────────────────────────────────────────────────────────
@@ -915,7 +925,7 @@ function initBot() {
     ctx.reply(
       `👤 <b>User Info</b>\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
-      `📛 Name: ${u.displayName}\n` +
+      `📛 Name: ${esc(u.displayName)}\n` +
       `🔖 Username: @${u.username||'N/A'}\n` +
       `🆔 Telegram ID: <code>${u.telegramId}</code>\n` +
       `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -979,7 +989,7 @@ function initBot() {
     const totalPages = Math.ceil(total / limit);
     let text = `👥 <b>User List</b> (Page ${page}/${totalPages} | Total: ${total})\n━━━━━━━━━━━━━━━━━━━━\n`;
     users.forEach((u, i) => {
-      text += `${skip+i+1}. <b>${u.displayName}</b> (@${u.username||'N/A'})\n` +
+      text += `${skip+i+1}. <b>${esc(u.displayName)}</b> (@${esc(u.username||'N/A')})\n` +
               `   🆔 <code>${u.telegramId}</code>\n` +
               `   💰 ${u.balance.toLocaleString()} Ks | 👥 ${u.referrals} refs` +
               `${u.isBanned?' 🚫':''}\n`;
@@ -996,7 +1006,7 @@ function initBot() {
     let text = `🏆 <b>Top 10 Users (by Referrals)</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
     users.forEach((u, i) => {
       const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':`${i+1}.`;
-      text += `${medal} <b>${u.displayName}</b>\n` +
+      text += `${medal} <b>${esc(u.displayName)}</b>\n` +
               `   👥 ${u.referrals} refs | 💰 ${u.totalEarned.toLocaleString()} Ks earned\n`;
     });
     ctx.reply(text, { parse_mode: 'HTML' });
@@ -1009,7 +1019,7 @@ function initBot() {
     if (!users.length) return ctx.reply('❌ No users');
     let text = `💰 <b>Top 10 Rich Users (by Balance)</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
     users.forEach((u, i) => {
-      text += `${i+1}. <b>${u.displayName}</b> (@${u.username||'N/A'})\n` +
+      text += `${i+1}. <b>${esc(u.displayName)}</b> (@${esc(u.username||'N/A')})\n` +
               `   💰 Balance: ${u.balance.toLocaleString()} Ks\n` +
               `   👥 ${u.referrals} refs | 🆔 <code>${u.telegramId}</code>\n`;
     });
@@ -1024,7 +1034,7 @@ function initBot() {
     if (chatId === ADMIN_ID) {
       if (pendingReplies[ADMIN_ID]) {
         const targetId = pendingReplies[ADMIN_ID]; delete pendingReplies[ADMIN_ID];
-        await sendTg(targetId, `📩 <b>Admin ထံမှ ပြန်စာ:</b>\n\n${ctx.message.text}`);
+        await sendTg(targetId, `📩 <b>Admin ထံမှ ပြန်စာ:</b>\n\n${esc(ctx.message.text)}`);
         await SupportMsg.create({ telegramId: targetId, displayName: 'Admin', text: ctx.message.text, direction: 'admin_to_user' }).catch(()=>{});
         return ctx.reply(`✅ Reply sent to ${targetId}`);
       }
@@ -1053,7 +1063,7 @@ function initBot() {
     await SupportMsg.create({ telegramId: chatId, displayName: u.displayName, text: ctx.message.text, direction: 'user_to_admin' }).catch(()=>{});
     if (ADMIN_ID) {
       await sendTg(ADMIN_ID,
-        `📨 <b>Support Message</b>\n👤 ${u.displayName} (@${u.username||'N/A'})\n🆔 <code>${chatId}</code>\n\n💬 ${ctx.message.text}`,
+        `📨 <b>Support Message</b>\n👤 ${esc(u.displayName)} (@${esc(u.username||'N/A')})\n🆔 <code>${chatId}</code>\n\n💬 ${esc(ctx.message.text)}`,
         { reply_markup: { inline_keyboard: [[{ text: '↩️ Reply', callback_data: `reply_${chatId}` }]] } }
       );
     }
@@ -1113,7 +1123,7 @@ function initBot() {
                 // Notify referrer with details
                 await sendTg(cleanRefId,
                   `🎉 <b>မိတ်ဆွေသစ် တစ်ယောက် ရောက်လာပါပြီ!</b>\n\n` +
-                  `👤 <b>ဖိတ်ကြားခံရသူ:</b> ${tgUser.first_name}${tgUser.username ? ' (@'+tgUser.username+')' : ''}\n` +
+                  `👤 <b>ဖိတ်ကြားခံရသူ:</b> ${esc(tgUser.first_name)}${tgUser.username ? ' (@'+tgUser.username+')' : ''}\n` +
                   `💰 <b>Referral Bonus:</b> ${REFERRAL_BONUS.toLocaleString()} Ks ထည့်ပေးပြီးပါပြီ။\n\n` +
                   `🔗 ဆက်လက်ဖိတ်ကြားပြီး ပိုမိုသောဆုချီးမြှင့်မှုများ ရယူပါ!`
                 );
@@ -1131,10 +1141,10 @@ function initBot() {
           });
         }
 
-        if (user.isBanned) return ctx.reply(`🚫 Account ပိတ်ထားပါသည်\nအကြောင်း: ${user.banReason}`);
+        if (user.isBanned) return ctx.reply(`🚫 Account ပိတ်ထားပါသည်\nအကြောင်း: ${esc(user.banReason)}`);
 
         await ctx.reply(
-          `👋 မင်္ဂလာပါ ${tgUser.first_name}\n` +
+          `👋 မင်္ဂလာပါ ${esc(tgUser.first_name)}\n` +
           `KBZPay Mini App မှ ကြိုဆိုပါသည် 🎉\n\n` +
           `💰 ယခုပဲ <b>💰 App ဖွင့်မည်</b> ကိုနှိပ်ပြီး ပိုက်ဆံများ စတင်ရှာဖွေလိုက်ပါ။\n\n` +
           `👥 အထူးအစီအစဉ်အနေဖြင့် မိမိ၏ သူငယ်ချင်းများကို ဖိတ်ခေါ်ပြီး တစ်ယောက်လျှင် ` +
@@ -1170,7 +1180,7 @@ function initBot() {
       await sendTg(wd.telegramId,
         `✅ <b>ငွေထုတ်ယူမှု အတည်ပြုပြီးပါပြီ!</b>\n\n💰 <b>${wd.netAmount.toLocaleString()} Ks</b> ကို မကြာမီ ပေးပို့ပါမည်\n📅 ${new Date().toLocaleString()}`
       );
-      return ctx.reply(`✅ <b>Approved!</b>\n👤 ${wd.user?.displayName}\n💰 ${wd.netAmount.toLocaleString()} Ks`, { parse_mode: 'HTML' });
+      return ctx.reply(`✅ <b>Approved!</b>\n👤 ${esc(wd.user?.displayName)}\n💰 ${wd.netAmount.toLocaleString()} Ks`, { parse_mode: 'HTML' });
     }
 
     if (data.startsWith('wd_reject_')) {
@@ -1198,7 +1208,7 @@ function initBot() {
           `📱 ဖုန်းတစ်လုံးရှိရုံနဲ့ တစ်နေ့ ၁ သိန်းအထိ ရှာလို့ရမယ့် အခွင့်အရေး! 💸\n\n` +
           `KBZPay နဲ့ ချိတ်ဆက်ထားတဲ့ Pay to Pay စနစ်သစ်မှာ အခုပဲ ပါဝင်လိုက်ပါ။ ` +
           `သူငယ်ချင်းတွေကို ဖိတ်ခေါ်ပြီးတော့လည်း Bonus တွေ အများကြီး ထုတ်ယူနိုင်ပါပြီ။\n\n` +
-          `✅ စိတ်ချရမှု ၁၀၀% အာမခံပါသည်။\n\n👇 အခုပဲ စာရင်းသွင်းပါ -\n${text}`,
+          `✅ စိတ်ချရမှု ၁၀၀% အာမခံပါသည်။\n\n👇 အခုပဲ စာရင်းသွင်းပါ -\n${esc(text)}`,
           { parse_mode: 'HTML' }
         );
       } catch (e) { console.warn('Ref link reply error:', e.message); }
