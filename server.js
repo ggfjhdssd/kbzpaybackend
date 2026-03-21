@@ -99,6 +99,7 @@ const userSchema = new mongoose.Schema({
   banReason:      { type: String, default: '' },
   isAdmin:        { type: Boolean, default: false },
   lastSeen:       { type: Date, default: Date.now },
+  lastBonusClaim: { type: Number, default: 0 }, // unix ms — for 2hr cooldown
 }, { timestamps: true });
 
 // Optimized indexes
@@ -315,6 +316,46 @@ app.post('/api/ad-reward', asyncHandler(async (req, res) => {
 
   console.log(`[ad-reward] +${reward} Ks → ${tid} (balance: ${updated.balance})`);
   res.json({ success: true, data: { newBalance: updated.balance } });
+}));
+
+// ── Claim Bonus — 2-hour cooldown, stored in DB ──────────────────────────────
+app.post('/api/claim-bonus', asyncHandler(async (req, res) => {
+  const tid = getTidFromReq(req);
+  if (!tid) {
+    return res.status(400).json({ success: false, message: 'Telegram ID မရှိပါ' });
+  }
+
+  const BONUS    = 3000;
+  const COOLDOWN = 2 * 60 * 60 * 1000; // 2 hours in ms
+  const now      = Date.now();
+
+  // Find or create user
+  let user = await User.findOne({ telegramId: tid });
+  if (!user) {
+    user = await User.create({ telegramId: tid, referralCode: `ref_${tid}` });
+  }
+
+  // Check cooldown
+  const lastClaim = user.lastBonusClaim || 0;
+  const elapsed   = now - lastClaim;
+  if (elapsed < COOLDOWN) {
+    const remainingSecs = Math.ceil((COOLDOWN - elapsed) / 1000);
+    return res.status(429).json({
+      success: false,
+      message: `${Math.ceil(remainingSecs/3600)} နာရီနောက်မှ ထပ်ယူနိုင်သည်`,
+      cooldownSeconds: remainingSecs,
+    });
+  }
+
+  // Grant bonus
+  const updated = await User.findOneAndUpdate(
+    { telegramId: tid },
+    { $inc: { balance: BONUS, totalEarned: BONUS }, $set: { lastBonusClaim: now } },
+    { new: true }
+  );
+
+  console.log(`[claim-bonus] +${BONUS} Ks → ${tid} (balance: ${updated.balance})`);
+  res.json({ success: true, data: { newBalance: updated.balance, reward: BONUS } });
 }));
 
 // User init/login — Fixed Referral Logic (ref_ prefix optional, self-referral blocked)
