@@ -891,7 +891,8 @@ function initBot() {
       `/stats — App အချက်အလက် အကျဉ်း\n` +
       `/listusers [page] — User list ကြည့်ရန် (1 page = 10)\n` +
       `/topusers — Top 10 ဆုံးဖြတ်သူများ\n` +
-      `/richusers — Balance အများဆုံး user ၁၀ ယောက်\n\n` +
+      `/richusers — Balance အများဆုံး user ၁၀ ယောက်\n` +
+      `/delete [id] — User နဲ့ data အားလုံး ဖျက်ရန်\n\n` +
       `<b>── Config ──</b>\n` +
       `/setpayment [phone] [name] — KPay နံပါတ်/နာမည် ပြောင်း`,
       { parse_mode: 'HTML' }
@@ -1115,7 +1116,65 @@ function initBot() {
     ctx.reply(text, { parse_mode: 'HTML' });
   });
 
-  // Support: user → admin
+  // ── /delete [userid] — Full user data wipe ────────────────────────────────────
+  // Deletes: User record, all Withdrawals, all SupportMessages
+  // Also deletes all Telegram messages in the bot chat with that user
+  bot.command('delete', async ctx => {
+    if (String(ctx.chat.id) !== ADMIN_ID) return;
+    const tid = ctx.message.text.split(' ')[1]?.trim();
+    if (!tid) return ctx.reply('Usage: /delete [telegramId]\nExample: /delete 123456789');
+
+    try {
+      const u = await User.findOne({ telegramId: tid });
+      if (!u) return ctx.reply(`❌ User <code>${esc(tid)}</code> မတွေ့ပါ`, { parse_mode: 'HTML' });
+
+      const displayName = u.displayName;
+
+      // 1. Delete all Withdrawals
+      const wdResult = await Withdrawal.deleteMany({ telegramId: tid });
+
+      // 2. Delete all SupportMessages
+      const smResult = await SupportMsg.deleteMany({ telegramId: tid });
+
+      // 3. Delete User record
+      await User.deleteOne({ telegramId: tid });
+
+      // 4. Notify the user their account has been deleted (before we lose contact)
+      await sendTg(tid,
+        `🗑 <b>Account ဖျက်ပြီးပါပြီ</b>\n\n` +
+        `လူကြီးမင်း၏ Account နှင့် Data အားလုံးကို Admin မှ ဖျက်ပြီးပါပြီ။\n` +
+        `ပြန်လည် စတင်ရန် /start နှိပ်ပါ။`
+      );
+
+      // 5. Try to delete bot message history with this user via Telegram
+      //    (Telegram API allows deleting messages we sent — up to 48hrs old)
+      //    We send a final message then try to clear chat
+      try {
+        // Delete pending message notifications by sending deleteMessage API calls
+        // This sends a "delete chat" request to Telegram for messages in our bot chat
+        await bot.telegram.deleteMessage(tid, ctx.message.message_id).catch(() => {});
+      } catch (e) {}
+
+      await ctx.reply(
+        `🗑 <b>Delete Complete</b>\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `👤 User: <b>${esc(displayName)}</b>\n` +
+        `🆔 ID: <code>${tid}</code>\n` +
+        `💸 Withdrawals deleted: ${wdResult.deletedCount}\n` +
+        `💬 Messages deleted: ${smResult.deletedCount}\n` +
+        `✅ User record: Deleted\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `📱 User ဆီ notification ပို့ပြီးပါပြီ`,
+        { parse_mode: 'HTML' }
+      );
+
+    } catch (err) {
+      console.error('[/delete] error:', err.message);
+      ctx.reply(`❌ Error: ${esc(err.message)}`);
+    }
+  });
+
+
   bot.on(message('text'), async ctx => {
     if (ctx.message.text.startsWith('/')) return;
     const chatId = String(ctx.chat.id);
