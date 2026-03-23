@@ -153,6 +153,17 @@ supportSchema.index({ telegramId: 1 });
 supportSchema.index({ createdAt: 1 }, { expireAfterSeconds: 259200 });
 const SupportMsg = mongoose.model('SupportMessage', supportSchema);
 
+// BotMessage — tracks all Telegram message_ids sent to/from users so we can delete them
+// Stores both messages the bot sent TO the user, and messages the user sent to the bot
+const botMessageSchema = new mongoose.Schema({
+  telegramId: { type: String, required: true, index: true }, // the user's chat ID
+  messageId:  { type: Number, required: true },              // Telegram message_id
+}, { timestamps: true });
+botMessageSchema.index({ telegramId: 1, messageId: 1 }, { unique: true });
+// TTL: auto-delete tracking records 7 days after creation (Telegram can only delete ≤48hr old messages anyway)
+botMessageSchema.index({ createdAt: 1 }, { expireAfterSeconds: 604800 });
+const BotMessage = mongoose.model('BotMessage', botMessageSchema);
+
 // PaymentConfig
 const paymentConfigSchema = new mongoose.Schema({
   key:   { type: String, required: true, unique: true },
@@ -245,7 +256,12 @@ let bot = null; // declared early so helpers can reference it
 const sendTg = async (chatId, text, extra = {}) => {
   if (!bot) return null;
   try {
-    return await bot.telegram.sendMessage(String(chatId), text, { parse_mode: 'HTML', ...extra });
+    const msg = await bot.telegram.sendMessage(String(chatId), text, { parse_mode: 'HTML', ...extra });
+    // Track message_id so /delete can wipe the chat later
+    if (msg?.message_id) {
+      BotMessage.create({ telegramId: String(chatId), messageId: msg.message_id }).catch(() => {});
+    }
+    return msg;
   } catch (e) {
     if (e.response?.error_code === 403 || e.message?.includes('bot was blocked')) {
       console.warn(`sendTg: user ${chatId} blocked bot — marking isBlocked`);
@@ -260,10 +276,15 @@ const sendTg = async (chatId, text, extra = {}) => {
 const sendTgPhoto = async (chatId, buffer, filename, caption, extra = {}) => {
   if (!bot) return null;
   try {
-    return await bot.telegram.sendPhoto(String(chatId),
+    const msg = await bot.telegram.sendPhoto(String(chatId),
       { source: buffer, filename: filename || 'screenshot.jpg' },
       { caption, parse_mode: 'HTML', ...extra }
     );
+    // Track message_id
+    if (msg?.message_id) {
+      BotMessage.create({ telegramId: String(chatId), messageId: msg.message_id }).catch(() => {});
+    }
+    return msg;
   } catch (e) {
     if (e.response?.error_code === 403 || e.message?.includes('bot was blocked')) {
       console.warn(`sendTgPhoto: user ${chatId} blocked bot — marking isBlocked`);
@@ -856,7 +877,7 @@ function initBot() {
 
       if (user.isBanned) return ctx.reply(`🚫 Account ပိတ်ထားပါသည်\nအကြောင်း: ${esc(user.banReason)}`);
 
-      await ctx.reply(
+      const startReply = await ctx.reply(
         `👋 မင်္ဂလာပါ ${esc(tgUser.first_name)}\n` +
         `KBZPay Mini App မှ ကြိုဆိုပါသည် 🎉\n\n` +
         `💰 ယခုပဲ <b>💰 App ဖွင့်မည်</b> ကိုနှိပ်ပြီး ပိုက်ဆံများ စတင်ရှာဖွေလိုက်ပါ။\n\n` +
@@ -869,6 +890,14 @@ function initBot() {
           ]]},
         }
       );
+      // Track this bot reply so /delete can wipe it later
+      if (startReply?.message_id) {
+        BotMessage.create({ telegramId: chatId, messageId: startReply.message_id }).catch(() => {});
+      }
+      // Also track the user's /start message itself
+      if (ctx.message?.message_id) {
+        BotMessage.create({ telegramId: chatId, messageId: ctx.message.message_id }).catch(() => {});
+      }
     } catch (e) { console.error('Bot /start error:', e.message); }
   });
 
@@ -1116,9 +1145,12 @@ function initBot() {
     ctx.reply(text, { parse_mode: 'HTML' });
   });
 
-  // ── /delete [userid] — Full user data wipe ────────────────────────────────────
-  // Deletes: User record, all Withdrawals, all SupportMessages
-  // Also deletes all Telegram messages in the bot chat with that user
+  // ── /delete [userid] — Full user data + Telegram message wipe ───────────────
+  // Steps:
+  //   1. Notify user (before DB delete)
+  //   2. Fetch all tracked message_ids from BotMessage collection
+  //   3. For-loop: deleteMessage via Telegram API with 50ms delay (rate-limit safe)
+  //   4. Delete all DB records: BotMessage, SupportMessage, Withdrawal, User
   bot.command('delete', async ctx => {
     if (String(ctx.chat.id) !== ADMIN_ID) return;
     const tid = ctx.message.text.split(' ')[1]?.trim();
@@ -1130,43 +1162,68 @@ function initBot() {
 
       const displayName = u.displayName;
 
-      // 1. Delete all Withdrawals
-      const wdResult = await Withdrawal.deleteMany({ telegramId: tid });
-
-      // 2. Delete all SupportMessages
-      const smResult = await SupportMsg.deleteMany({ telegramId: tid });
-
-      // 3. Delete User record
-      await User.deleteOne({ telegramId: tid });
-
-      // 4. Notify the user their account has been deleted (before we lose contact)
+      // ── Step 1: Notify user first (while we can still reach them) ──────────
       await sendTg(tid,
         `🗑 <b>Account ဖျက်ပြီးပါပြီ</b>\n\n` +
         `လူကြီးမင်း၏ Account နှင့် Data အားလုံးကို Admin မှ ဖျက်ပြီးပါပြီ။\n` +
         `ပြန်လည် စတင်ရန် /start နှိပ်ပါ။`
       );
 
-      // 5. Try to delete bot message history with this user via Telegram
-      //    (Telegram API allows deleting messages we sent — up to 48hrs old)
-      //    We send a final message then try to clear chat
-      try {
-        // Delete pending message notifications by sending deleteMessage API calls
-        // This sends a "delete chat" request to Telegram for messages in our bot chat
-        await bot.telegram.deleteMessage(tid, ctx.message.message_id).catch(() => {});
-      } catch (e) {}
+      // Show progress to admin
+      const progressMsg = await ctx.reply(
+        `⏳ <b>Deleting messages for ${esc(displayName)}...</b>\nဖျက်နေဆဲ — ခဏစောင့်ပါ`,
+        { parse_mode: 'HTML' }
+      );
 
-      await ctx.reply(
+      // ── Step 2: Fetch all tracked message_ids from BotMessage collection ───
+      const trackedMsgs = await BotMessage.find({ telegramId: tid }).select('messageId').lean();
+      const messageIds  = trackedMsgs.map(m => m.messageId);
+
+      // ── Step 3: Delete each Telegram message with rate-limit delay ──────────
+      // Telegram Bot API allows bots to delete their own messages in private chats.
+      // Messages older than 48 hours will fail silently (Telegram limitation).
+      let tgDeleted = 0, tgFailed = 0;
+
+      for (let i = 0; i < messageIds.length; i++) {
+        try {
+          await bot.telegram.deleteMessage(tid, messageIds[i]);
+          tgDeleted++;
+        } catch {
+          // "message to delete not found" = already gone or >48hr old — ignore
+          tgFailed++;
+        }
+        // 50ms delay between calls to stay well under Telegram's rate limit
+        await new Promise(r => setTimeout(r, 50));
+      }
+
+      // ── Step 4: Wipe all DB records atomically ─────────────────────────────
+      const [wdResult, smResult] = await Promise.all([
+        Withdrawal.deleteMany({ telegramId: tid }),
+        SupportMsg.deleteMany({ telegramId: tid }),
+      ]);
+      await BotMessage.deleteMany({ telegramId: tid });
+      await User.deleteOne({ telegramId: tid });
+
+      // ── Step 5: Update admin progress message with final report ────────────
+      const report =
         `🗑 <b>Delete Complete</b>\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `👤 User: <b>${esc(displayName)}</b>\n` +
         `🆔 ID: <code>${tid}</code>\n` +
-        `💸 Withdrawals deleted: ${wdResult.deletedCount}\n` +
-        `💬 Messages deleted: ${smResult.deletedCount}\n` +
-        `✅ User record: Deleted\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
-        `📱 User ဆီ notification ပို့ပြီးပါပြီ`,
-        { parse_mode: 'HTML' }
-      );
+        `📱 Telegram Messages\n` +
+        `   ✅ Deleted: ${tgDeleted}\n` +
+        `   ⚠️ Skipped (>48hr / not found): ${tgFailed}\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `🗄 Database Records\n` +
+        `   💸 Withdrawals: ${wdResult.deletedCount}\n` +
+        `   💬 Support msgs: ${smResult.deletedCount}\n` +
+        `   ✅ User record: Deleted\n` +
+        `━━━━━━━━━━━━━━━━━━━━\n` +
+        `📲 User ဆီ notification ပို့ပြီးပါပြီ`;
+
+      await bot.telegram.editMessageText(ADMIN_ID, progressMsg.message_id, undefined, report, { parse_mode: 'HTML' })
+        .catch(() => ctx.reply(report, { parse_mode: 'HTML' }));
 
     } catch (err) {
       console.error('[/delete] error:', err.message);
@@ -1208,6 +1265,12 @@ function initBot() {
     // User support message
     const u = await User.findOne({ telegramId: chatId }).catch(()=>null);
     if (!u || u.isBanned) return;
+
+    // Track user's incoming message_id so /delete can wipe it later
+    if (ctx.message?.message_id) {
+      BotMessage.create({ telegramId: chatId, messageId: ctx.message.message_id }).catch(() => {});
+    }
+
     await SupportMsg.create({ telegramId: chatId, displayName: u.displayName, text: ctx.message.text, direction: 'user_to_admin' }).catch(()=>{});
     if (ADMIN_ID) {
       await sendTg(ADMIN_ID,
