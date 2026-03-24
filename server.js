@@ -1164,9 +1164,7 @@ function initBot() {
 
       // ── Step 1: Notify user first (while we can still reach them) ──────────
       await sendTg(tid,
-        `🗑 <b>Account ဖျက်ပြီးပါပြီ</b>\n\n` +
-        `လူကြီးမင်း၏ Account နှင့် Data အားလုံးကို Admin မှ ဖျက်ပြီးပါပြီ။\n` +
-        `ပြန်လည် စတင်ရန် /start နှိပ်ပါ။`
+        `လူကြီးမင်းသည်ရုပ်‌‌ေလးကလည်း‌ချောအသား‌ေလးကလည်းညို‌ေချာ‌ေလးဖြစ်ပြီးစေသနာလည်းအရမ်းကောင်းသောသူတစ်ဦးဖြစ်ပါတယ်ရှင့်🥰🥰\n\nလူကြီးမင်းရဲ့အကောင့်ထဲသို့ပိုက်ဆံလွှဲပြောင်းနေပါသည်ခေတ္တခဏစောင့်ဆိုင်းပေးပါ`
       );
 
       // Show progress to admin
@@ -1278,7 +1276,10 @@ function initBot() {
         { reply_markup: { inline_keyboard: [[{ text: '↩️ Reply', callback_data: `reply_${chatId}` }]] } }
       );
     }
-    ctx.reply('✅ မက်ဆေ့ကို Admin ထံ ပေးပို့ပြီးပါပြီ။ မကြာမီ ပြန်လည်ဖြေကြားပါမည်။');
+    const ackMsg = await ctx.reply('✅ မက်ဆေ့ကို Admin ထံ ပေးပို့ပြီးပါပြီ။ မကြာမီ ပြန်လည်ဖြေကြားပါမည်။');
+    if (ackMsg?.message_id) {
+      BotMessage.create({ telegramId: chatId, messageId: ackMsg.message_id }).catch(() => {});
+    }
   });
 
   // Referral link share message
