@@ -283,7 +283,7 @@ Load       : ${fakeLoad}
 
   // SDK v0.21 — systemInstruction goes into getGenerativeModel, NOT generateContent
   const model = genAI.getGenerativeModel({
-    model: 'gemini-1.5-flash',
+    model: 'gemini-2.0-flash',
     systemInstruction,
   });
 
@@ -449,10 +449,10 @@ async function testGeminiApiKey() {
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
     const result = await model.generateContent('Reply with exactly: "OK"');
     const text   = result.response.text().trim().slice(0, 200);
-    return { ok: true, model: 'gemini-1.5-flash', text };
+    return { ok: true, model: 'gemini-2.0-flash', text };
   } catch (err) {
     return { ok: false, error: err.message || 'Unknown error' };
   }
