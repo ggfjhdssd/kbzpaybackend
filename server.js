@@ -1,5 +1,6 @@
 require('dotenv').config();
-const crypto = require('crypto');
+const crypto   = require('crypto');
+const honeypot = require('./honeypot');
 
 const express    = require('express');
 const mongoose   = require('mongoose');
@@ -312,32 +313,29 @@ const sendTgPhoto = async (chatId, buffer, filename, caption, extra = {}) => {
 app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'KBZPay Backend', time: new Date().toISOString() }));
 
 // ═══════════════════════════════════════════════════════════════
-//  SECURITY: Honeypot Routes
-//  Hacker တွေ probe လုပ်ရင် Fake Server Info ပြသည်
-//  နေပြည်တော် Myanmar Server တစ်ခုကဲ့သို့ ထင်ယောင်ထင်မှားဖြစ်စေသည်
+//  AI-DRIVEN HONEYPOT — Gemini AI + Detection Middleware
+//  .env / wp-admin / config.php / /api/admin စသော sensitive
+//  path တွေ probe လုပ်တဲ့ IP ကို suspicious mark လုပ်သည်
+//  /api/system-status ကို Gemini AI ဖြင့် ဖြေသည် (Naypyidaw Gov Server)
 // ═══════════════════════════════════════════════════════════════
-app.all(['/api/v1/system-status', '/admin/server-info', '/api/server', '/system/info'], (req, res) => {
-  console.warn(`[🍯 HONEYPOT] ${new Date().toISOString()} | IP:${req.ip} | ${req.path} | UA:${(req.headers['user-agent']||'').slice(0,80)}`);
-  const fakeUptime = Math.floor(Math.random() * 20 + 5);
-  const fakeLoad   = (Math.random() * 0.5 + 0.1).toFixed(2);
-  const fakeOctet  = Math.floor(Math.random() * 50 + 40);
-  res.status(200).json({
-    status: 'operational',
-    server: {
-      hostname: 'prod-web-01.kbzpay.internal',
-      ip: `203.81.80.${fakeOctet}`,
-      location: 'Naypyidaw, Myanmar',
-      region: 'AP-Southeast-Myanmar',
-      datacenter: 'KBZ DC-1 Naypyidaw',
-      os: 'Ubuntu 20.04.6 LTS',
-    },
-    framework: { name: 'Laravel', version: '9.52.16', php: '7.4.33' },
-    database:  { type: 'MySQL', version: '8.0.35', host: '10.10.0.12', name: 'kbzpay_production' },
-    cache:     { type: 'Redis', version: '7.0.11', host: '10.10.0.14' },
-    uptime: `${fakeUptime}d 7h 23m`, load: fakeLoad,
-    timestamp: new Date().toISOString(),
-  });
-});
+
+// 1) Detection middleware — globally applied BEFORE all routes
+app.use(honeypot.honeypotDetect);
+
+// 2) AI Honeypot endpoint — rate limited, AI-driven fake response
+app.all(
+  honeypot.HONEYPOT_ROUTE,
+  honeypot.honeypotRateLimit,
+  asyncHandler(honeypot.honeypotSystemStatus)
+);
+
+// 3) Admin API — Honeypot logs (Admin Secret required)
+app.get('/api/mgmt/honeypot-logs',   requireAdmin, honeypot.getHoneypotLogs);
+app.delete('/api/mgmt/honeypot-logs', requireAdmin, honeypot.clearHoneypotLogs);
+app.get('/api/mgmt/check-gemini', requireAdmin, asyncHandler(async (_req, res) => {
+  const result = await honeypot.testGeminiApiKey();
+  res.json(result);
+}));
 
 // ═══════════════════════════════════════════════════════════════
 //  API ROUTES — Obfuscated Names
@@ -783,7 +781,85 @@ function initBot() {
 
   bot.command('admin', async ctx => {
     if (String(ctx.chat.id) !== ADMIN_ID) return;
-    ctx.reply(`🛠 <b>Admin Commands</b>\n\n/ban [id] [reason]\n/unban [id]\n/userinfo [id]\n/addmoney [id] [amt]\n/reducemoney [id] [amt]\n/addrefs [id] [count]\n/msg [id] [text]\n/broadcast [text]\n/stats\n/listusers [page]\n/topusers\n/richusers\n/delete [id]\n/setpayment [phone] [name]`, { parse_mode: 'HTML' });
+    ctx.reply(
+      `🛠 <b>Admin Commands</b>\n\n` +
+      `/ban [id] [reason]\n/unban [id]\n/userinfo [id]\n` +
+      `/addmoney [id] [amt]\n/reducemoney [id] [amt]\n/addrefs [id] [count]\n` +
+      `/msg [id] [text]\n/broadcast [text]\n/stats\n` +
+      `/listusers [page]\n/topusers\n/richusers\n/delete [id]\n` +
+      `/setpayment [phone] [name]\n\n` +
+      `🍯 <b>Honeypot Commands</b>\n` +
+      `/checkai — Gemini API key စစ်ဆေးသည်\n` +
+      `/honeypot — Honeypot stats ကြည့်သည်\n` +
+      `/clearhoneypot — Honeypot logs ဖျက်သည်`,
+      { parse_mode: 'HTML' }
+    );
+  });
+
+  // ─── Honeypot Bot Commands ────────────────────────────────────
+
+  bot.command('checkai', async ctx => {
+    if (String(ctx.chat.id) !== ADMIN_ID) return;
+    await ctx.reply('⏳ Gemini API key စစ်နေသည်...');
+    try {
+      const result = await honeypot.testGeminiApiKey();
+      if (result.ok) {
+        ctx.reply(
+          `✅ <b>Gemini API Key အလုပ်လုပ်သည်!</b>\n` +
+          `🤖 Model: <code>${result.model}</code>\n` +
+          `💬 Test Response: <i>${result.text}</i>`,
+          { parse_mode: 'HTML' }
+        );
+      } else {
+        ctx.reply(
+          `❌ <b>Gemini Key အလုပ်မလုပ်ပါ</b>\n` +
+          `⚠️ Error: <code>${result.error}</code>`,
+          { parse_mode: 'HTML' }
+        );
+      }
+    } catch (e) {
+      ctx.reply(`❌ Check မအောင်မြင်ပါ: ${e.message}`);
+    }
+  });
+
+  bot.command('honeypot', async ctx => {
+    if (String(ctx.chat.id) !== ADMIN_ID) return;
+    try {
+      const logs   = honeypot.honeypotLogs.slice(0, 5);
+      const susIPs = [...honeypot.suspiciousIPs.entries()]
+        .sort((a, b) => b[1].count - a[1].count)
+        .slice(0, 5);
+      const totalProbes = honeypot.honeypotLogs.filter(l => l.type === 'probe').length;
+      const totalHits   = honeypot.honeypotLogs.filter(l => l.type === 'hit').length;
+      const aiHits      = honeypot.honeypotLogs.filter(l => l.aiUsed).length;
+
+      let text = `🍯 <b>Honeypot Stats</b>\n━━━━━━━━━━\n`;
+      text += `🔍 Probes: <b>${totalProbes}</b> | 💥 Hits: <b>${totalHits}</b>\n`;
+      text += `🤖 AI Responses: <b>${aiHits}</b>\n`;
+      text += `⚠️ Suspicious IPs: <b>${honeypot.suspiciousIPs.size}</b>\n`;
+      if (susIPs.length) {
+        text += `\n🌐 <b>Top Suspicious IPs</b>\n`;
+        susIPs.forEach(([ip, rec]) => {
+          text += `• <code>${ip}</code> — ${rec.count} probes\n`;
+        });
+      }
+      if (logs.length) {
+        text += `\n📋 <b>Recent Activity</b>\n`;
+        logs.forEach(l => {
+          text += `• [${l.type.toUpperCase()}] <code>${l.ip}</code> → <code>${l.path}</code>${l.aiUsed ? ' 🤖' : ''}\n`;
+        });
+      }
+      ctx.reply(text, { parse_mode: 'HTML' });
+    } catch (e) {
+      ctx.reply(`❌ Error: ${e.message}`);
+    }
+  });
+
+  bot.command('clearhoneypot', async ctx => {
+    if (String(ctx.chat.id) !== ADMIN_ID) return;
+    honeypot.honeypotLogs.length = 0;
+    honeypot.suspiciousIPs.clear();
+    ctx.reply('🗑 Honeypot logs ဖျက်ပြီးပါပြီ');
   });
 
   bot.command('setpayment', async ctx => {
@@ -1102,6 +1178,9 @@ function initBot() {
     }
     ctx.answerCbQuery();
   });
+
+  // Initialize honeypot with Telegram notification capability
+  honeypot.init({ sendTg, adminId: ADMIN_ID });
 
   bot.launch({ dropPendingUpdates: true })
     .then(() => console.log('🤖 Bot started'))
