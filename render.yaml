@@ -3,38 +3,64 @@ services:
     name: kbzpaybackend
     env: node
     plan: free
+    region: singapore
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /health
+
     envVars:
+      # ── Static / Default Values ───────────────────────────────
       - key: NODE_ENV
         value: production
+
       - key: PORT
         value: "10000"
+
       - key: MIN_WITHDRAW
         value: "100000"
+
       - key: SERVICE_FEE
         value: "5000"
+
       - key: REFERRAL_BONUS
         value: "5000"
+
       - key: PAYMENT_PHONE
         value: "09702310926"
+
       - key: PAYMENT_NAME
         value: "Daw Mi Thaung"
-      # ── Fill these in Render Dashboard → Environment ──
+
+      # ── Fill these in Render Dashboard → Environment ──────────
+      # MongoDB Atlas connection string
       - key: MONGODB_URI
         sync: false
+
+      # Telegram Bot token (from @BotFather)
       - key: BOT_TOKEN
         sync: false
+
+      # Telegram Bot username (without @)
       - key: BOT_USERNAME
         sync: false
+
+      # Your personal Telegram chat ID (admin)
       - key: ADMIN_CHAT_ID
         sync: false
+
+      # Secret key for admin API endpoints
       - key: ADMIN_SECRET
         sync: false
-      - key: CLOUDINARY_CLOUD_NAME
+
+      # Telegram channel ID e.g. @Kbzzpay
+      - key: CHANNEL_ID
         sync: false
-      - key: CLOUDINARY_API_KEY
+
+      # Telegram channel invite link
+      - key: CHANNEL_LINK
         sync: false
-      - key: CLOUDINARY_API_SECRET
+
+      # ── AI Honeypot ───────────────────────────────────────────
+      # Google Gemini API key (get from https://aistudio.google.com)
+      - key: GEMINI_API_KEY
         sync: false
