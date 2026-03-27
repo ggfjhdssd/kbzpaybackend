@@ -65,6 +65,22 @@ const HONEYPOT_RATE_MAX       = 5;         // max 5 requests per minute per IP
 // Max in-memory log entries
 const MAX_LOG_ENTRIES = 200;
 
+// Quota cooldown duration after 429 error (1 hour)
+const QUOTA_COOLDOWN_MS = 60 * 60 * 1000;
+
+// ─────────────────────────────────────────────────────────────
+//  GEMINI STATE — quota tracking & cooldown
+// ─────────────────────────────────────────────────────────────
+const geminiState = {
+  ok:                 null,    // last known working state (true/false/null=unknown)
+  lastError:          null,    // last error message string
+  lastErrorTime:      null,    // Date of last error
+  lastSuccessTime:    null,    // Date of last success
+  quotaCooldownUntil: null,    // timestamp — skip Gemini until this time after 429
+  totalCalls:         0,
+  totalErrors:        0,
+};
+
 // ─────────────────────────────────────────────────────────────
 //  STATE (in-memory)
 // ─────────────────────────────────────────────────────────────
@@ -246,6 +262,13 @@ async function getGeminiResponse(hackerQuery) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
 
+  // ── Quota cooldown: skip Gemini entirely if quota was recently exceeded ──
+  if (geminiState.quotaCooldownUntil && Date.now() < geminiState.quotaCooldownUntil) {
+    const mins = Math.ceil((geminiState.quotaCooldownUntil - Date.now()) / 60000);
+    throw new Error(`Quota cooldown active — ${mins}m remaining. Using static fallback.`);
+  }
+
+  geminiState.totalCalls++;
   const genAI = new GoogleGenerativeAI(apiKey);
 
   const fakeOctet  = randomInt(40, 89);
@@ -291,7 +314,26 @@ Load       : ${fakeLoad}
     ? `System status request. Additional query: "${hackerQuery.slice(0, 300)}"`
     : 'Request system status overview.';
 
-  const result = await model.generateContent(userPrompt);
+  const result = await model.generateContent(userPrompt).catch(err => {
+    // Track error state
+    geminiState.ok            = false;
+    geminiState.lastError     = err.message || String(err);
+    geminiState.lastErrorTime = new Date();
+    geminiState.totalErrors++;
+
+    // 429 quota exceeded → set cooldown
+    if (geminiState.lastError.includes('429') || geminiState.lastError.includes('quota')) {
+      geminiState.quotaCooldownUntil = Date.now() + QUOTA_COOLDOWN_MS;
+      console.warn('[HONEYPOT] Gemini quota exceeded — cooldown 1hr activated');
+    }
+    throw err;
+  });
+
+  // Success — clear error state
+  geminiState.ok              = true;
+  geminiState.lastError       = null;
+  geminiState.lastSuccessTime = new Date();
+  geminiState.quotaCooldownUntil = null;
 
   const rawText = result.response.text();
 
@@ -447,13 +489,49 @@ async function testGeminiApiKey() {
     return { ok: false, error: 'GEMINI_API_KEY environment variable မထည့်ရသေးပါ' };
   }
 
+  // ── If quota cooldown is active, report without calling API ──
+  if (geminiState.quotaCooldownUntil && Date.now() < geminiState.quotaCooldownUntil) {
+    const remainingMins = Math.ceil((geminiState.quotaCooldownUntil - Date.now()) / 60000);
+    const remainingHrs  = (remainingMins / 60).toFixed(1);
+    return {
+      ok:            false,
+      quotaCooldown: true,
+      error:         `Free tier quota ကုန်သွားသည် — ${remainingMins} မိနစ် (${remainingHrs}h) ကြာမှ retry`,
+      cooldownEndsAt: new Date(geminiState.quotaCooldownUntil).toISOString(),
+      lastError:      geminiState.lastError,
+      note:           'Hacker တွေကိုတော့ Static fake data ဆက်ပေးနေသည် ✅',
+    };
+  }
+
+  // ── Live test (only if no cooldown) ──
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
     const result = await model.generateContent('Reply with exactly: "OK"');
     const text   = result.response.text().trim().slice(0, 200);
+
+    geminiState.ok              = true;
+    geminiState.lastError       = null;
+    geminiState.lastSuccessTime = new Date();
+    geminiState.quotaCooldownUntil = null;
+
     return { ok: true, model: 'gemini-2.0-flash', text };
   } catch (err) {
+    geminiState.ok            = false;
+    geminiState.lastError     = err.message || String(err);
+    geminiState.lastErrorTime = new Date();
+    geminiState.totalErrors++;
+
+    if (geminiState.lastError.includes('429') || geminiState.lastError.includes('quota')) {
+      geminiState.quotaCooldownUntil = Date.now() + QUOTA_COOLDOWN_MS;
+      return {
+        ok:            false,
+        quotaCooldown: true,
+        error:         'Free tier quota ကုန်သွားသည် — 1 နာရီ cooldown စသည်',
+        note:          'Hacker တွေကိုတော့ Static fake data ဆက်ပေးနေသည် ✅',
+      };
+    }
+
     return { ok: false, error: err.message || 'Unknown error' };
   }
 }
@@ -473,4 +551,5 @@ module.exports = {
   suspiciousIPs,
   honeypotLogs,
   HONEYPOT_ROUTE,
+  geminiState,
 };

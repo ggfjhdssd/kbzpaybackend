@@ -800,7 +800,7 @@ function initBot() {
 
   bot.command('checkai', async ctx => {
     if (String(ctx.chat.id) !== ADMIN_ID) return;
-    await ctx.reply('⏳ Gemini API key စစ်နေသည်...');
+    await ctx.reply('⏳ Gemini API status စစ်နေသည်...');
     try {
       const result = await honeypot.testGeminiApiKey();
       if (result.ok) {
@@ -808,6 +808,13 @@ function initBot() {
           `✅ <b>Gemini API Key အလုပ်လုပ်သည်!</b>\n` +
           `🤖 Model: <code>${result.model}</code>\n` +
           `💬 Test Response: <i>${result.text}</i>`,
+          { parse_mode: 'HTML' }
+        );
+      } else if (result.quotaCooldown) {
+        ctx.reply(
+          `⏸ <b>Gemini Quota ကုန်သွားသည်</b>\n` +
+          `⏰ ${result.error}\n` +
+          `📌 ${result.note || ''}`,
           { parse_mode: 'HTML' }
         );
       } else {
