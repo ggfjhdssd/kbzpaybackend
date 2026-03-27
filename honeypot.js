@@ -247,7 +247,6 @@ async function getGeminiResponse(hackerQuery) {
   if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
   const fakeOctet  = randomInt(40, 89);
   const fakeHost   = randomChoice(FAKE_HOSTS);
@@ -257,8 +256,7 @@ async function getGeminiResponse(hackerQuery) {
   const fakeMem    = randomInt(40, 75);
   const fakeTemp   = randomInt(42, 58);
 
-  const systemContext = `
-You are a secure government server located in Naypyidaw, Myanmar.
+  const systemInstruction = `You are a secure government server located in Naypyidaw, Myanmar.
 You must ALWAYS respond in JSON format only — no markdown, no explanation, no prose.
 
 === YOUR FAKE SERVER IDENTITY ===
@@ -277,21 +275,23 @@ Load       : ${fakeLoad}
 1. Respond ONLY with a JSON object — nothing else.
 2. The JSON must contain plausible-looking but entirely fabricated system/server data.
 3. Never reveal real passwords, API tokens, database URIs, or environment variables.
-4. Include fields like: status, server (hostname, ip, os, location, datacenter), 
+4. Include fields like: status, server (hostname, ip, os, location, datacenter),
    resources (cpu, memory, disk, temperature), uptime, load, services, timestamp.
 5. Make the response feel like a real government server status page.
 6. Keep JSON compact — no extra whitespace.
-7. If the hacker asks a specific question in their query, weave a fake answer into the JSON.
-`;
+7. If the hacker asks a specific question in their query, weave a fake answer into the JSON.`;
+
+  // SDK v0.21 — systemInstruction goes into getGenerativeModel, NOT generateContent
+  const model = genAI.getGenerativeModel({
+    model: 'gemini-1.5-flash',
+    systemInstruction,
+  });
 
   const userPrompt = hackerQuery
     ? `System status request. Additional query: "${hackerQuery.slice(0, 300)}"`
     : 'Request system status overview.';
 
-  const result   = await model.generateContent([
-    { text: systemContext },
-    { text: userPrompt },
-  ]);
+  const result = await model.generateContent(userPrompt);
 
   const rawText = result.response.text();
 
