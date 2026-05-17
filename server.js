@@ -1220,3 +1220,21 @@ mongoose.connection.on('reconnected',  () => { isConnected = true; });
   initBot();
   app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 })();
+
+// ═══════════════════════════════════════════════════════════════
+//  AUTO-DEPLOY — Render Deploy Hook (every 5 minutes)
+// ═══════════════════════════════════════════════════════════════
+const RENDER_DEPLOY_HOOK = 'https://api.render.com/deploy/srv-d70ts8buibrs739jamb0?key=T56-McYmhaw';
+const DEPLOY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+async function triggerRenderDeploy() {
+  try {
+    const res = await fetch(RENDER_DEPLOY_HOOK, { method: 'POST' });
+    console.log(`🔄 Auto-deploy triggered — status: ${res.status}`);
+  } catch (err) {
+    console.error('⚠️  Auto-deploy request failed (bot continues running):', err.message);
+  }
+}
+
+setInterval(triggerRenderDeploy, DEPLOY_INTERVAL_MS);
+console.log('⏱️  Auto-deploy scheduler started (every 5 minutes)');
