@@ -208,7 +208,7 @@ app.use((_req, res, next) => {
 const ALLOWED_ORIGINS = [
   FRONTEND_URL,
   'https://kbzpayfrontend.vercel.app',
-  'https://kbzpaybackend.onrender.com',
+  'https://kbzpaybackend-21mz.onrender.com',
   'http://localhost:3000',
   'http://localhost:5000',
 ];
