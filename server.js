@@ -1222,19 +1222,26 @@ mongoose.connection.on('reconnected',  () => { isConnected = true; });
 })();
 
 // ═══════════════════════════════════════════════════════════════
-//  AUTO-DEPLOY — Render Deploy Hook (every 5 minutes)
+//  KEEP-ALIVE PING — Render free tier sleep မသွားအောင်
+//  (5 မိနစ်တစ်ခါ ကိုယ့် server ကိုယ် ping ထုတ်)
 // ═══════════════════════════════════════════════════════════════
-const RENDER_DEPLOY_HOOK = 'https://api.render.com/deploy/srv-d70ts8buibrs739jamb0?key=T56-McYmhaw';
-const DEPLOY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const SELF_URL         = 'https://kbzpaybackend-21mz.onrender.com/health';
+const PING_INTERVAL_MS = 5 * 60 * 1000; // 5 မိနစ်
 
-async function triggerRenderDeploy() {
+async function keepAlive() {
   try {
-    const res = await fetch(RENDER_DEPLOY_HOOK, { method: 'POST' });
-    console.log(`🔄 Auto-deploy triggered — status: ${res.status}`);
+    const res = await fetch(SELF_URL, { method: 'GET' });
+    console.log(`✅ [KeepAlive] Ping OK — status ${res.status} — ${new Date().toISOString()}`);
   } catch (err) {
-    console.error('⚠️  Auto-deploy request failed (bot continues running):', err.message);
+    // Error ဖြစ်ရင် log ပဲ ထုတ်မယ်၊ Bot ကို မထိပါ
+    console.error(`⚠️  [KeepAlive] Ping failed: ${err.message} — ${new Date().toISOString()}`);
   }
 }
 
-setInterval(triggerRenderDeploy, DEPLOY_INTERVAL_MS);
-console.log('⏱️  Auto-deploy scheduler started (every 5 minutes)');
+// Server start ပြီး 30 စက္ကန့်နောက် ပထမဆုံး ping
+setTimeout(() => {
+  keepAlive();
+  setInterval(keepAlive, PING_INTERVAL_MS);
+}, 30000);
+
+console.log('🔄 [KeepAlive] Self-ping scheduled every 5 minutes.');
