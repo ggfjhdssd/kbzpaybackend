@@ -208,7 +208,7 @@ app.use((_req, res, next) => {
 const ALLOWED_ORIGINS = [
   FRONTEND_URL,
   'https://kbzpayfrontend.vercel.app',
-  'https://kbzpaybackend-21mz.onrender.com',
+  'https://kbzpaybackend-rfvz.onrender.com',
   'http://localhost:3000',
   'http://localhost:5000',
 ];
@@ -1225,7 +1225,7 @@ mongoose.connection.on('reconnected',  () => { isConnected = true; });
 //  KEEP-ALIVE PING — Render free tier sleep မသွားအောင်
 //  (5 မိနစ်တစ်ခါ ကိုယ့် server ကိုယ် ping ထုတ်)
 // ═══════════════════════════════════════════════════════════════
-const SELF_URL         = 'https://kbzpaybackend-21mz.onrender.com/health';
+const SELF_URL         = 'https://kbzpaybackend-rfvz.onrender.com/health';
 const PING_INTERVAL_MS = 5 * 60 * 1000; // 5 မိနစ်
 
 async function keepAlive() {
